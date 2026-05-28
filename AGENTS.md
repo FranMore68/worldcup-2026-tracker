@@ -2,6 +2,17 @@
 
 PROJECT: FIFA World Cup 2026 Tracker
 
+PROJECT STRUCTURE:
+
+Application source code:
+/app
+
+Documentation:
+/docs
+
+Implementation tasks:
+/tasks
+
 MANDATORY STACK:
 - Next.js 15
 - TypeScript Strict
@@ -23,6 +34,23 @@ CRITICAL RULES:
 8. Server Components by default.
 9. No Vercel-specific features.
 10. Read all docs before implementing.
+11. Application source code is located in /app.
+12. Read all files inside /docs before implementation.
+13. Read all files inside /tasks before implementation.
+14. Documentation is authoritative.
+15. If assumptions conflict with documentation, documentation wins.
+
 
 ARCHITECTURE:
 API-Football -> Sync Layer -> Supabase -> Next.js UI
+
+IMPLEMENTATION WORKFLOW:
+
+1. Read AGENTS.md
+2. Read all files in /docs
+3. Read all files in /tasks
+4. Analyze project
+5. Produce implementation plan
+6. Only then start coding
+
+DO NOT start implementation immediately after loading the repository.
