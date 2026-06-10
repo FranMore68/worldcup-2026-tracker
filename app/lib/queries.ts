@@ -7,14 +7,14 @@ function getDb() {
   return getSupabaseClient();
 }
 
-export async function getAllTeams(): Promise<(Team & { venues?: Venue | null })[]> {
+export async function getAllTeams(): Promise<Team[]> {
   const { data, error } = await getDb()
     .from("teams")
-    .select("*, venues(*)")
+    .select("*")
     .order("name");
 
   if (error) throw new Error(error.message);
-  return (data ?? []) as (Team & { venues?: Venue | null })[];
+  return (data ?? []) as Team[];
 }
 
 export async function getTeamByApiId(apiId: number): Promise<Team & { venues?: Venue | null }> {
