@@ -83,7 +83,7 @@ export default async function GroupsPage() {
                           </td>
                           <td className="px-4 py-3">
                             <Link
-                              href={`/team/${standing.team_id}`}
+                              href={`/team-detail?id=${standing.team_id}`}
                               className="flex items-center gap-2"
                             >
                               {team?.logo && (

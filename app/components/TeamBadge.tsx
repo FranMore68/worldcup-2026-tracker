@@ -13,7 +13,7 @@ export default function TeamBadge({ apiId, name, logo, size = 32 }: TeamBadgePro
 
   return (
     <Link
-      href={`/team/${apiId}`}
+      href={`/team-detail?id=${apiId}`}
       className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"
     >
       <Image
