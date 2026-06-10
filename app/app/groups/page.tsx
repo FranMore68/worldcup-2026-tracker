@@ -3,6 +3,8 @@ import { formatGroupName } from "@/lib/utils";
 import Image from "next/image";
 import Link from "next/link";
 
+export const dynamic = "force-dynamic";
+
 export const metadata = {
   title: "Grups - Mundial 2026",
 };

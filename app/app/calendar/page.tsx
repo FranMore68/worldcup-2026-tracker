@@ -2,6 +2,8 @@ import { getAllFixtures, getAllTeams } from "@/lib/queries";
 import MatchCard from "@/components/MatchCard";
 import { formatDate } from "@/lib/utils";
 
+export const dynamic = "force-dynamic";
+
 export const metadata = {
   title: "Calendari - Mundial 2026",
 };

@@ -4,6 +4,8 @@ import { formatDate } from "@/lib/utils";
 import { Calendar, Trophy, Activity } from "lucide-react";
 import Link from "next/link";
 
+export const dynamic = "force-dynamic";
+
 export default async function HomePage() {
   const [fixtures, teams, todayFixtures, syncStatus] = await Promise.all([
     getAllFixtures().catch(() => []),
