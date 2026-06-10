@@ -7,13 +7,19 @@ import { ArrowLeft, MapPin } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
+export async function generateStaticParams() {
+  return [];
+}
+
 interface MatchPageProps {
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }
 
 export default async function MatchPage({ params }: MatchPageProps) {
-  const { id } = await params;
+  const { id } = params;
   const fixtureId = Number(id);
+  
+  console.log("[MatchPage] Rendering for id:", id, "fixtureId:", fixtureId);
 
   const [fixture, teams] = await Promise.all([
     getFixtureByApiId(fixtureId).catch(() => null),

@@ -7,12 +7,16 @@ import { ArrowLeft, Flag, Calendar } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
+export async function generateStaticParams() {
+  return [];
+}
+
 interface TeamPageProps {
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }
 
 export default async function TeamPage({ params }: TeamPageProps) {
-  const { id } = await params;
+  const { id } = params;
   const teamId = Number(id);
 
   const [team, allFixtures, allTeams] = await Promise.all([
