@@ -17,6 +17,7 @@ export function formatDate(dateString: string | Date): string {
     year: "numeric",
     month: "long",
     day: "numeric",
+    timeZone: "Europe/Madrid",
   });
 }
 
@@ -25,6 +26,7 @@ export function formatTime(dateString: string | Date): string {
   return date.toLocaleTimeString("ca-ES", {
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Europe/Madrid",
   });
 }
 
