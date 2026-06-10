@@ -5,6 +5,8 @@ import Link from "next/link";
 import MatchCard from "@/components/MatchCard";
 import { ArrowLeft, Flag, Calendar } from "lucide-react";
 
+export const dynamic = "force-dynamic";
+
 interface TeamPageProps {
   params: Promise<{ id: string }>;
 }

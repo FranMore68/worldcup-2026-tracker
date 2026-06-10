@@ -5,6 +5,8 @@ import Link from "next/link";
 import StatusBadge from "@/components/StatusBadge";
 import { ArrowLeft, MapPin } from "lucide-react";
 
+export const dynamic = "force-dynamic";
+
 interface MatchPageProps {
   params: Promise<{ id: string }>;
 }
