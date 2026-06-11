@@ -13,6 +13,10 @@ export function getSupabaseClient() {
       autoRefreshToken: false,
       persistSession: false,
     },
+    global: {
+      // Bypass Next.js Data Cache: live scores must always read fresh rows.
+      fetch: (url, init) => fetch(url, { ...init, cache: "no-store" }),
+    },
   });
 }
 

@@ -27,4 +27,4 @@ Personal World Cup portal for family and friends.
 Catalan only.
 
 ## Acceptance
-Responsive, fast, works with API-Football free tier.
+Responsive, fast, works with the free OpenLigaDB API.

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSupabaseClient } from "@/lib/supabase";
 
+export const dynamic = "force-dynamic";
+
 const TEAM_NAME_DE_TO_CA: Record<string, { name: string; country: string }> = {
   "Mexiko": { name: "Mèxic", country: "Mèxic" },
   "Südafrika": { name: "Sud-àfrica", country: "Sud-àfrica" },
@@ -67,13 +69,6 @@ const GROUPS: Record<string, number[]> = {
   "Grup L": [755, 7325, 754, 4631],
 };
 
-function getGroupForTeam(teamId: number): string {
-  for (const [group, ids] of Object.entries(GROUPS)) {
-    if (ids.includes(teamId)) return group;
-  }
-  return "Grup Desconegut";
-}
-
 function getGroupForMatch(team1Id: number, team2Id: number): string {
   for (const [group, ids] of Object.entries(GROUPS)) {
     if (ids.includes(team1Id) && ids.includes(team2Id)) return group;
@@ -113,7 +108,8 @@ export async function GET() {
 
     // Extract unique teams
     const teamMap = new Map<number, { teamId: number; teamName: string; shortName: string; teamIconUrl: string }>();
-    for (const match of allMatches as Array<{ team1: any; team2: any }>) {
+    interface SeedTeam { teamId: number; teamName: string; shortName: string; teamIconUrl: string }
+    for (const match of allMatches as Array<{ team1: SeedTeam; team2: SeedTeam }>) {
       [match.team1, match.team2].forEach((t) => {
         if (!teamMap.has(t.teamId)) teamMap.set(t.teamId, t);
       });

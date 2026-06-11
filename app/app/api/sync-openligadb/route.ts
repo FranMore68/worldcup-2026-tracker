@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseClient } from "@/lib/supabase";
-import { getOpenLigaMatches } from "@/lib/openLigaDb";
+import { getOpenLigaMatches, OpenLigaMatch } from "@/lib/openLigaDb";
+import { getKnockoutStageKey, stageLabel } from "@/lib/rounds";
+
+export const dynamic = "force-dynamic";
 
 const SYNC_SECRET = process.env.SYNC_SECRET;
+
+// A match is considered potentially live from kickoff until this many minutes
+// later (covers extra time, penalties and long stoppages).
+const LIVE_WINDOW_MINUTES = 170;
 
 const TEAM_NAME_DE_TO_CA: Record<string, { name: string; country: string }> = {
   "Mexiko": { name: "Mèxic", country: "Mèxic" },
@@ -77,263 +84,408 @@ function getGroupForMatch(team1Id: number, team2Id: number): string {
   return "Grup Desconegut";
 }
 
-function extractGoals(match: any): { homeGoals: number | null; awayGoals: number | null; status: string } {
+/**
+ * Canonical round label in Catalan. Group stage: "Grup X - Jornada N".
+ * Knockout: stage label from lib/rounds. Within the "Finale" matchday the
+ * latest kickoff is the final, the other match is the 3rd-place playoff.
+ */
+function getRoundLabel(match: OpenLigaMatch, allMatches: OpenLigaMatch[]): string {
+  const orderId = match.group?.groupOrderID ?? 0;
+
+  if (orderId >= 1 && orderId <= 3) {
+    const group = getGroupForMatch(match.team1.teamId, match.team2.teamId);
+    return `${group} - Jornada ${orderId}`;
+  }
+
+  const sameDayMatches = allMatches.filter(
+    (m) => (m.group?.groupOrderID ?? 0) === orderId
+  );
+  const lastKickoff = sameDayMatches.reduce(
+    (max, m) => (m.matchDateTimeUTC > max ? m.matchDateTimeUTC : max),
+    match.matchDateTimeUTC
+  );
+  const isLastOfFinalDay =
+    sameDayMatches.length <= 1 || match.matchDateTimeUTC === lastKickoff;
+
+  const key = getKnockoutStageKey(
+    { round: null, raw_payload: { original: { group: match.group } } },
+    isLastOfFinalDay
+  );
+
+  return key ? stageLabel(key) : `Eliminatòries - Jornada ${orderId}`;
+}
+
+interface ExtractedState {
+  homeGoals: number | null;
+  awayGoals: number | null;
+  status: string;
+  statusLong: string;
+}
+
+function extractMatchState(match: OpenLigaMatch, now: Date): ExtractedState {
+  const kickoff = new Date(match.matchDateTimeUTC);
+  const liveWindowEnd = new Date(kickoff.getTime() + LIVE_WINDOW_MINUTES * 60_000);
+
   if (match.matchIsFinished) {
-    // Find final result
-    const finalResult = match.matchResults?.find(
-      (r: any) => r.resultTypeID === 2
-    );
+    const finalResult = match.matchResults?.find((r) => r.resultTypeID === 2);
     if (finalResult) {
       return {
         homeGoals: finalResult.pointsTeam1,
         awayGoals: finalResult.pointsTeam2,
         status: "FT",
+        statusLong: "Finalitzat",
       };
     }
   }
 
-  if (match.goals && match.goals.length > 0) {
-    const lastGoal = match.goals[match.goals.length - 1];
+  const lastGoal = match.goals && match.goals.length > 0
+    ? match.goals[match.goals.length - 1]
+    : null;
+
+  if (!match.matchIsFinished && now >= kickoff && now <= liveWindowEnd) {
     return {
-      homeGoals: lastGoal.scoreTeam1,
-      awayGoals: lastGoal.scoreTeam2,
+      homeGoals: lastGoal?.scoreTeam1 ?? 0,
+      awayGoals: lastGoal?.scoreTeam2 ?? 0,
       status: "LIV",
+      statusLong: "En directe",
     };
   }
 
-  return {
-    homeGoals: null,
-    awayGoals: null,
-    status: match.matchIsFinished ? "FT" : "NS",
-  };
+  if (match.matchIsFinished) {
+    // Finished but without a typed final result: fall back to last goal score.
+    return {
+      homeGoals: lastGoal?.scoreTeam1 ?? 0,
+      awayGoals: lastGoal?.scoreTeam2 ?? 0,
+      status: "FT",
+      statusLong: "Finalitzat",
+    };
+  }
+
+  return { homeGoals: null, awayGoals: null, status: "NS", statusLong: "No començat" };
 }
 
-export async function POST(request: NextRequest) {
+/**
+ * OpenLigaDB goals carry the running score but not the scoring team, so the
+ * side is derived from which counter increased relative to the previous goal.
+ */
+function buildGoalEvents(match: OpenLigaMatch) {
+  let prevHome = 0;
+  const events = [];
+
+  for (const goal of match.goals ?? []) {
+    const homeScored = goal.scoreTeam1 > prevHome;
+    const teamId = homeScored ? match.team1.teamId : match.team2.teamId;
+    prevHome = goal.scoreTeam1;
+
+    events.push({
+      fixture_id: match.matchID,
+      event_type: "Goal",
+      elapsed: goal.matchMinute,
+      extra_time: null,
+      team_id: teamId,
+      player_id: goal.goalGetterID || null,
+      player_name: goal.goalGetterName?.trim() || null,
+      assist_id: null,
+      assist_name: null,
+      detail: goal.isOwnGoal
+        ? "Own Goal"
+        : goal.isPenalty
+          ? "Penalty"
+          : "Normal Goal",
+      comments: goal.comment,
+      raw_payload: goal as unknown as Record<string, unknown>,
+      synced_at: new Date().toISOString(),
+    });
+  }
+
+  return events;
+}
+
+function isAuthorized(request: NextRequest): boolean {
+  if (!SYNC_SECRET) return false;
   const authHeader = request.headers.get("authorization");
+  if (authHeader === `Bearer ${SYNC_SECRET}`) return true;
+  const secretParam = request.nextUrl.searchParams.get("secret");
+  return secretParam === SYNC_SECRET;
+}
 
-  if (!SYNC_SECRET) {
-    return NextResponse.json({ error: "SYNC_SECRET not configured" }, { status: 500 });
+async function runSync(type: string) {
+  const db = getSupabaseClient();
+  const allMatches = await getOpenLigaMatches(2026);
+  const now = new Date();
+
+  const results: Record<string, unknown> = {};
+
+  const matchesToSync =
+    type === "live"
+      ? allMatches.filter((m) => {
+          const kickoff = new Date(m.matchDateTimeUTC);
+          const windowStart = new Date(kickoff.getTime() - 6 * 3600_000);
+          const windowEnd = new Date(kickoff.getTime() + LIVE_WINDOW_MINUTES * 60_000 + 3600_000);
+          return now >= windowStart && now <= windowEnd;
+        })
+      : allMatches;
+
+  // Always upsert the teams referenced by the matches being synced, so the
+  // fixtures FK is satisfied even for knockout placeholders that appear later.
+  const teamMap = new Map<number, OpenLigaMatch["team1"]>();
+  const teamSource = type === "teams" || type === "all" ? allMatches : matchesToSync;
+
+  for (const match of teamSource) {
+    [match.team1, match.team2].forEach((t) => {
+      if (t?.teamId && !teamMap.has(t.teamId)) teamMap.set(t.teamId, t);
+    });
   }
 
-  if (authHeader !== `Bearer ${SYNC_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Preserve the FIFA enrichment blob (squad/coach) written by /api/sync-fifa.
+  const { data: existingTeams } = await db.from("teams").select("api_id, raw_payload");
+  const existingFifaByTeam = new Map<number, unknown>();
+  for (const row of (existingTeams ?? []) as { api_id: number; raw_payload: Record<string, unknown> }[]) {
+    if (row.raw_payload?.fifa) existingFifaByTeam.set(row.api_id, row.raw_payload.fifa);
   }
 
-  const body = (await request.json()) as { type?: string };
-  const type = body.type ?? "all";
+  for (const [id, team] of teamMap) {
+    const ca = TEAM_NAME_DE_TO_CA[team.teamName] || { name: team.teamName, country: team.teamName };
+    const rawPayload: Record<string, unknown> = { source: "openligadb", original: team };
+    const existingFifa = existingFifaByTeam.get(id);
+    if (existingFifa) rawPayload.fifa = existingFifa;
 
-  try {
-    const db = getSupabaseClient();
-    const allMatches = await getOpenLigaMatches(2026);
+    const { error } = await db.from("teams").upsert(
+      {
+        api_id: id,
+        name: ca.name,
+        code: team.shortName,
+        country: ca.country,
+        founded: null,
+        national: true,
+        logo: team.teamIconUrl || null,
+        venue_id: null,
+        raw_payload: rawPayload,
+        synced_at: new Date().toISOString(),
+      },
+      { onConflict: "api_id" }
+    );
+    if (error) console.error("Team error:", error.message);
+  }
 
-    const results: Record<string, unknown> = {};
+  results.teams = { success: true, count: teamMap.size };
 
-    if (type === "all" || type === "teams") {
-      const teamMap = new Map<
-        number,
-        { teamId: number; teamName: string; shortName: string; teamIconUrl: string | null }
-      >();
+  if (type === "all" || type === "fixtures" || type === "live") {
+    let updated = 0;
+    let eventsWritten = 0;
 
-      for (const match of allMatches) {
-        [match.team1, match.team2].forEach((t) => {
-          if (!teamMap.has(t.teamId)) teamMap.set(t.teamId, t);
-        });
-      }
+    for (const match of matchesToSync) {
+      if (!match.team1?.teamId || !match.team2?.teamId) continue;
 
-      for (const [id, team] of teamMap) {
-        const ca = TEAM_NAME_DE_TO_CA[team.teamName] || { name: team.teamName, country: team.teamName };
-        const { error } = await db.from("teams").upsert(
+      const round = getRoundLabel(match, allMatches);
+      const { homeGoals, awayGoals, status, statusLong } = extractMatchState(match, now);
+
+      const { data: existing } = await db
+        .from("fixtures")
+        .select("status_short, home_goals, away_goals, round, raw_payload")
+        .eq("api_id", match.matchID)
+        .maybeSingle();
+
+      const needsUpdate =
+        !existing ||
+        existing.status_short !== status ||
+        existing.home_goals !== homeGoals ||
+        existing.away_goals !== awayGoals ||
+        existing.round !== round;
+
+      if (needsUpdate) {
+        // Preserve the FIFA enrichment blob written by /api/sync-fifa.
+        const existingFifa = (existing?.raw_payload as Record<string, unknown> | undefined)?.fifa;
+        const rawPayload: Record<string, unknown> = { source: "openligadb", original: match };
+        if (existingFifa) rawPayload.fifa = existingFifa;
+
+        const { error } = await db.from("fixtures").upsert(
           {
-            api_id: id,
-            name: ca.name,
-            code: team.shortName,
-            country: ca.country,
-            founded: null,
-            national: true,
-            logo: team.teamIconUrl || null,
+            api_id: match.matchID,
+            match_date_utc: new Date(match.matchDateTimeUTC).toISOString(),
+            match_date_local: match.matchDateTime,
+            status_short: status,
+            status_long: statusLong,
+            round,
+            home_team_id: match.team1.teamId,
+            away_team_id: match.team2.teamId,
+            home_goals: homeGoals,
+            away_goals: awayGoals,
             venue_id: null,
-            raw_payload: { source: "openligadb", original: team },
+            league_id: 1,
+            season: 2026,
+            raw_payload: rawPayload,
             synced_at: new Date().toISOString(),
           },
           { onConflict: "api_id" }
         );
-        if (error) console.error("Team error:", error.message);
-      }
 
-      results.teams = { success: true, count: teamMap.size };
-    }
+        if (error) {
+          console.error("Fixture error:", error.message);
+          continue;
+        }
+        updated++;
 
-    if (type === "all" || type === "fixtures" || type === "live") {
-      const matchesToSync = type === "live"
-        ? allMatches.filter((m) => {
-            const today = new Date().toISOString().split("T")[0];
-            return m.matchDateTimeUTC.startsWith(today);
-          })
-        : allMatches;
+        // Refresh goal events for this fixture (delete + insert keeps the
+        // table consistent when OpenLigaDB corrects scorers afterwards).
+        // Skip when the FIFA sync already wrote richer events for it.
+        const { data: fifaEvents } = await db
+          .from("fixture_events")
+          .select("id")
+          .eq("fixture_id", match.matchID)
+          .filter("raw_payload->>source", "eq", "fifa")
+          .limit(1);
 
-      let updated = 0;
-      for (const match of matchesToSync) {
-        const group = getGroupForMatch(match.team1.teamId, match.team2.teamId);
-        const round = `${group} - Jornada ${match.group?.groupOrderID || 1}`;
-        const { homeGoals, awayGoals, status } = extractGoals(match);
+        if (!fifaEvents || fifaEvents.length === 0) {
+          const goalEvents = buildGoalEvents(match);
+          await db
+            .from("fixture_events")
+            .delete()
+            .eq("fixture_id", match.matchID)
+            .eq("event_type", "Goal");
 
-        const { data: existing } = await db
-          .from("fixtures")
-          .select("status_short")
-          .eq("api_id", match.matchID)
-          .single();
-
-        // Only sync if status changed or has goals
-        const needsUpdate =
-          !existing ||
-          existing.status_short !== status ||
-          (homeGoals !== null && awayGoals !== null);
-
-        if (needsUpdate) {
-          const { error } = await db.from("fixtures").upsert(
-            {
-              api_id: match.matchID,
-              match_date_utc: new Date(match.matchDateTimeUTC).toISOString(),
-              match_date_local: match.matchDateTime,
-              status_short: status,
-              status_long: status === "FT" ? "Finalitzat" : status === "LIV" ? "En directe" : "No començat",
-              round,
-              home_team_id: match.team1.teamId,
-              away_team_id: match.team2.teamId,
-              home_goals: homeGoals,
-              away_goals: awayGoals,
-              venue_id: null,
-              league_id: 1,
-              season: 2026,
-              raw_payload: { source: "openligadb", original: match },
-              synced_at: new Date().toISOString(),
-            },
-            { onConflict: "api_id" }
-          );
-          if (error) {
-            console.error("Fixture error:", error.message);
-          } else {
-            updated++;
+          if (goalEvents.length > 0) {
+            const { error: eventsError } = await db.from("fixture_events").insert(goalEvents);
+            if (eventsError) {
+              console.error("Events error:", eventsError.message);
+            } else {
+              eventsWritten += goalEvents.length;
+            }
           }
         }
       }
-
-      results.fixtures = { success: true, count: matchesToSync.length, updated };
     }
 
-    if (type === "all" || type === "standings") {
-      // Get all fixtures to calculate standings
-      const { data: fixtures } = await db
-        .from("fixtures")
-        .select("*")
-        .eq("season", 2026)
-        .eq("status_short", "FT");
+    results.fixtures = {
+      success: true,
+      count: matchesToSync.length,
+      updated,
+      events: eventsWritten,
+    };
 
-      // Reset standings
-      for (const [group, teamIds] of Object.entries(GROUPS)) {
-        for (const teamId of teamIds) {
-          await db.from("standings").upsert(
-            {
-              season: 2026,
-              group_name: group,
-              team_id: teamId,
-              rank: 1,
-              points: 0,
-              goals_diff: 0,
-              played: 0,
-              won: 0,
-              draw: 0,
-              lost: 0,
-              goals_for: 0,
-              goals_against: 0,
-              raw_payload: { source: "openligadb", calculated: false },
-              synced_at: new Date().toISOString(),
-            },
-            { onConflict: "season, group_name, team_id" }
-          );
-        }
+    await db
+      .from("app_settings")
+      .update({ value: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("key", "last_fixtures_sync");
+  }
+
+  if (type === "all" || type === "standings") {
+    // Standings are computed only from finished group-stage fixtures.
+    const { data: fixtures } = await db
+      .from("fixtures")
+      .select("*")
+      .eq("season", 2026)
+      .eq("status_short", "FT")
+      .like("round", "Grup %");
+
+    const standings: Record<
+      string,
+      Record<
+        number,
+        { played: number; won: number; draw: number; lost: number; gf: number; ga: number; points: number }
+      >
+    > = {};
+
+    // Every group starts with its four teams at zero, so ranks are always
+    // complete even before any match has finished.
+    for (const [group, teamIds] of Object.entries(GROUPS)) {
+      standings[group] = {};
+      for (const teamId of teamIds) {
+        standings[group][teamId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
       }
-
-      // Calculate standings
-      const standings: Record<
-        string,
-        Record<
-          number,
-          { played: number; won: number; draw: number; lost: number; gf: number; ga: number; points: number }
-        >
-      > = {};
-
-      for (const fixture of fixtures || []) {
-        const group = fixture.round?.split(" - ")[0] || "Grup Desconegut";
-        if (!standings[group]) standings[group] = {};
-
-        const homeId = fixture.home_team_id;
-        const awayId = fixture.away_team_id;
-        const homeGoals = fixture.home_goals ?? 0;
-        const awayGoals = fixture.away_goals ?? 0;
-
-        if (!standings[group][homeId]) standings[group][homeId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
-        if (!standings[group][awayId]) standings[group][awayId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
-
-        standings[group][homeId].played++;
-        standings[group][awayId].played++;
-        standings[group][homeId].gf += homeGoals;
-        standings[group][homeId].ga += awayGoals;
-        standings[group][awayId].gf += awayGoals;
-        standings[group][awayId].ga += homeGoals;
-
-        if (homeGoals > awayGoals) {
-          standings[group][homeId].won++;
-          standings[group][homeId].points += 3;
-          standings[group][awayId].lost++;
-        } else if (homeGoals < awayGoals) {
-          standings[group][awayId].won++;
-          standings[group][awayId].points += 3;
-          standings[group][homeId].lost++;
-        } else {
-          standings[group][homeId].draw++;
-          standings[group][homeId].points += 1;
-          standings[group][awayId].draw++;
-          standings[group][awayId].points += 1;
-        }
-      }
-
-      // Update standings in DB
-      for (const [group, teams] of Object.entries(standings)) {
-        const sorted = Object.entries(teams).sort((a, b) => {
-          if (b[1].points !== a[1].points) return b[1].points - a[1].points;
-          const diffB = b[1].gf - b[1].ga;
-          const diffA = a[1].gf - a[1].ga;
-          return diffB - diffA;
-        });
-
-        for (let i = 0; i < sorted.length; i++) {
-          const [teamId, stats] = sorted[i];
-          await db.from("standings").upsert(
-            {
-              season: 2026,
-              group_name: group,
-              team_id: Number(teamId),
-              rank: i + 1,
-              points: stats.points,
-              goals_diff: stats.gf - stats.ga,
-              played: stats.played,
-              won: stats.won,
-              draw: stats.draw,
-              lost: stats.lost,
-              goals_for: stats.gf,
-              goals_against: stats.ga,
-              raw_payload: { source: "openligadb", calculated: true },
-              synced_at: new Date().toISOString(),
-            },
-            { onConflict: "season, group_name, team_id" }
-          );
-        }
-      }
-
-      results.standings = { success: true, groups: Object.keys(standings).length };
     }
 
+    for (const fixture of fixtures || []) {
+      const group = fixture.round?.split(" - ")[0] || "Grup Desconegut";
+      if (!standings[group]) standings[group] = {};
+
+      const homeId = fixture.home_team_id;
+      const awayId = fixture.away_team_id;
+      const homeGoals = fixture.home_goals ?? 0;
+      const awayGoals = fixture.away_goals ?? 0;
+
+      if (!standings[group][homeId]) standings[group][homeId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
+      if (!standings[group][awayId]) standings[group][awayId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
+
+      standings[group][homeId].played++;
+      standings[group][awayId].played++;
+      standings[group][homeId].gf += homeGoals;
+      standings[group][homeId].ga += awayGoals;
+      standings[group][awayId].gf += awayGoals;
+      standings[group][awayId].ga += homeGoals;
+
+      if (homeGoals > awayGoals) {
+        standings[group][homeId].won++;
+        standings[group][homeId].points += 3;
+        standings[group][awayId].lost++;
+      } else if (homeGoals < awayGoals) {
+        standings[group][awayId].won++;
+        standings[group][awayId].points += 3;
+        standings[group][homeId].lost++;
+      } else {
+        standings[group][homeId].draw++;
+        standings[group][homeId].points += 1;
+        standings[group][awayId].draw++;
+        standings[group][awayId].points += 1;
+      }
+    }
+
+    for (const [group, teams] of Object.entries(standings)) {
+      // FIFA tiebreakers (simplified): points, goal difference, goals scored.
+      const sorted = Object.entries(teams).sort((a, b) => {
+        if (b[1].points !== a[1].points) return b[1].points - a[1].points;
+        const diffB = b[1].gf - b[1].ga;
+        const diffA = a[1].gf - a[1].ga;
+        if (diffB !== diffA) return diffB - diffA;
+        return b[1].gf - a[1].gf;
+      });
+
+      for (let i = 0; i < sorted.length; i++) {
+        const [teamId, stats] = sorted[i];
+        await db.from("standings").upsert(
+          {
+            season: 2026,
+            group_name: group,
+            team_id: Number(teamId),
+            rank: i + 1,
+            points: stats.points,
+            goals_diff: stats.gf - stats.ga,
+            played: stats.played,
+            won: stats.won,
+            draw: stats.draw,
+            lost: stats.lost,
+            goals_for: stats.gf,
+            goals_against: stats.ga,
+            raw_payload: { source: "openligadb", calculated: true },
+            synced_at: new Date().toISOString(),
+          },
+          { onConflict: "season, group_name, team_id" }
+        );
+      }
+    }
+
+    results.standings = { success: true, groups: Object.keys(standings).length };
+
+    await db
+      .from("app_settings")
+      .update({ value: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("key", "last_standings_sync");
+  }
+
+  return results;
+}
+
+async function handleRequest(request: NextRequest, type: string) {
+  if (!SYNC_SECRET) {
+    return NextResponse.json({ error: "SYNC_SECRET not configured" }, { status: 500 });
+  }
+
+  if (!isAuthorized(request)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const results = await runSync(type);
     return NextResponse.json({
       success: true,
       syncs: results,
@@ -343,4 +495,22 @@ export async function POST(request: NextRequest) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+export async function POST(request: NextRequest) {
+  let type = "all";
+  try {
+    const body = (await request.json()) as { type?: string };
+    if (body.type) type = body.type;
+  } catch {
+    // Empty body: keep default.
+  }
+  return handleRequest(request, type);
+}
+
+// GET variant so plain cron jobs (crontab/Coolify scheduled tasks) can call
+// the sync with a simple curl: /api/sync-openligadb?type=live&secret=...
+export async function GET(request: NextRequest) {
+  const type = request.nextUrl.searchParams.get("type") ?? "all";
+  return handleRequest(request, type);
 }

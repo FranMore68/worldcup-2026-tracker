@@ -12,13 +12,13 @@ Database:
 Supabase PostgreSQL
 
 Flow:
-API-Football
+OpenLigaDB
  -> Sync Jobs
  -> Supabase
  -> UI
 
 Modules:
-/lib/apiFootball
+/lib/openLigaDb
 /lib/supabaseAdmin
 /lib/sync
 /app

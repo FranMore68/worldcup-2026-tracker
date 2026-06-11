@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getSupabaseClient } from "@/lib/supabase";
 
-export async function GET(_request: NextRequest) {
+export const dynamic = "force-dynamic";
+
+export async function GET() {
   try {
     const db = getSupabaseClient();
     const { data: fixtures } = await db.from("fixtures").select("api_id");

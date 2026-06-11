@@ -1,5 +1,43 @@
 "use server";
 
+export interface OpenLigaTeam {
+  teamId: number;
+  teamName: string;
+  shortName: string;
+  teamIconUrl: string | null;
+  teamGroupName: string | null;
+}
+
+export interface OpenLigaGoal {
+  goalID: number;
+  scoreTeam1: number;
+  scoreTeam2: number;
+  matchMinute: number | null;
+  goalGetterID: number;
+  goalGetterName: string;
+  isPenalty: boolean;
+  isOwnGoal: boolean;
+  isOvertime: boolean;
+  comment: string | null;
+}
+
+export interface OpenLigaResult {
+  resultID: number;
+  resultName: string;
+  pointsTeam1: number;
+  pointsTeam2: number;
+  resultOrderID: number;
+  // 1 = halftime, 2 = final result
+  resultTypeID: number;
+  resultDescription: string | null;
+}
+
+export interface OpenLigaLocation {
+  locationID: number | null;
+  locationCity: string | null;
+  locationStadium: string | null;
+}
+
 export interface OpenLigaMatch {
   matchID: number;
   matchDateTime: string;
@@ -14,39 +52,14 @@ export interface OpenLigaMatch {
     groupOrderID: number;
     groupID: number;
   };
-  team1: {
-    teamId: number;
-    teamName: string;
-    shortName: string;
-    teamIconUrl: string | null;
-    teamGroupName: string | null;
-  };
-  team2: {
-    teamId: number;
-    teamName: string;
-    shortName: string;
-    teamIconUrl: string | null;
-    teamGroupName: string | null;
-  };
+  team1: OpenLigaTeam;
+  team2: OpenLigaTeam;
   matchIsFinished: boolean;
-  matchResults: Array<{
-    resultName: string;
-    pointsTeam1: number;
-    pointsTeam2: number;
-    resultTypeID: number;
-    resultDescriptionID: number;
-  }>;
-  goals: Array<{
-    goalID: number;
-    scoreTeam1: number;
-    scoreTeam2: number;
-    matchMinute: number | null;
-    isOwnGoal: boolean;
-    isPenalty: boolean;
-    playerName: string;
-  }>;
-  location: string | null;
+  matchResults: OpenLigaResult[];
+  goals: OpenLigaGoal[];
+  location: OpenLigaLocation | null;
   numberOfViewers: number | null;
+  lastUpdateDateTime: string | null;
 }
 
 export async function getOpenLigaMatches(season: number = 2026): Promise<OpenLigaMatch[]> {
@@ -78,15 +91,4 @@ export async function getOpenLigaMatches(season: number = 2026): Promise<OpenLig
   }
 
   return allMatches;
-}
-
-export async function getOpenLigaLiveMatches(season: number = 2026): Promise<OpenLigaMatch[]> {
-  const matches = await getOpenLigaMatches(season);
-  const now = new Date();
-  const today = now.toISOString().split("T")[0];
-
-  return matches.filter((m) => {
-    const matchDate = m.matchDateTimeUTC.split("T")[0];
-    return matchDate === today;
-  });
 }

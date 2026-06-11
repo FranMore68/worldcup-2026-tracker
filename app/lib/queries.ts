@@ -1,7 +1,8 @@
 "use server";
 
 import { getSupabaseClient } from "./supabase";
-import { Team, Venue, Fixture, Standing, SyncLog } from "@/types/schemas";
+import { Team, Venue, Fixture, Standing, SyncLog, FixtureEvent } from "@/types/schemas";
+import { FINISHED_STATUSES, LIVE_STATUSES } from "./utils";
 
 function getDb() {
   return getSupabaseClient();
@@ -20,7 +21,7 @@ export async function getAllTeams(): Promise<Team[]> {
 export async function getTeamByApiId(apiId: number): Promise<Team & { venues?: Venue | null }> {
   const { data, error } = await getDb()
     .from("teams")
-    .select("*, venues(*)")
+    .select("*")
     .eq("api_id", apiId)
     .single();
 
@@ -94,6 +95,74 @@ export async function getSyncStatus(): Promise<{ key: string; value: string | nu
 
   if (error) throw new Error(error.message);
   return (data ?? []) as { key: string; value: string | null }[];
+}
+
+export async function getLiveFixtures(): Promise<Fixture[]> {
+  const { data, error } = await getDb()
+    .from("fixtures")
+    .select("*")
+    .in("status_short", [...LIVE_STATUSES])
+    .order("match_date_utc");
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Fixture[];
+}
+
+export async function getRecentResults(limit: number = 5): Promise<Fixture[]> {
+  const { data, error } = await getDb()
+    .from("fixtures")
+    .select("*")
+    .in("status_short", [...FINISHED_STATUSES])
+    .order("match_date_utc", { ascending: false })
+    .limit(limit);
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Fixture[];
+}
+
+export async function getFixturesByTeam(teamApiId: number): Promise<Fixture[]> {
+  const { data, error } = await getDb()
+    .from("fixtures")
+    .select("*")
+    .or(`home_team_id.eq.${teamApiId},away_team_id.eq.${teamApiId}`)
+    .order("match_date_utc", { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Fixture[];
+}
+
+export async function getFixtureEvents(fixtureApiId: number): Promise<FixtureEvent[]> {
+  const { data, error } = await getDb()
+    .from("fixture_events")
+    .select("*")
+    .eq("fixture_id", fixtureApiId)
+    .order("elapsed", { ascending: true, nullsFirst: false });
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as FixtureEvent[];
+}
+
+export async function getEventsByTeam(teamApiId: number): Promise<FixtureEvent[]> {
+  const { data, error } = await getDb()
+    .from("fixture_events")
+    .select("*")
+    .eq("team_id", teamApiId);
+
+  if (error) throw new Error(error.message);
+  return (data ?? []) as FixtureEvent[];
+}
+
+export async function getStandingForTeam(
+  teamApiId: number
+): Promise<Standing | null> {
+  const { data, error } = await getDb()
+    .from("standings")
+    .select("*")
+    .eq("team_id", teamApiId)
+    .maybeSingle();
+
+  if (error) return null;
+  return data as Standing | null;
 }
 
 export async function getRecentSyncLogs(limit: number = 10): Promise<SyncLog[]> {

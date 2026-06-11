@@ -30,7 +30,17 @@ export default async function GroupsPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
-      <h1 className="mb-6 text-2xl font-bold">Classificació per grups</h1>
+      <h1 className="mb-2 text-2xl font-bold">Classificació per grups</h1>
+      <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-1 rounded-full bg-emerald-500" />
+          Classificat per a setzens
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-1 rounded-full bg-amber-400" />
+          Possible classificat (8 millors tercers)
+        </span>
+      </div>
 
       {sortedGroups.length === 0 && (
         <div className="rounded-xl border border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
@@ -79,7 +89,18 @@ export default async function GroupsPage() {
                           className="border-b border-zinc-100 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/50"
                         >
                           <td className="px-4 py-3 font-medium">
-                            {standing.rank}
+                            <span className="flex items-center gap-2">
+                              <span
+                                className={`h-5 w-1 rounded-full ${
+                                  standing.rank <= 2
+                                    ? "bg-emerald-500"
+                                    : standing.rank === 3
+                                      ? "bg-amber-400"
+                                      : "bg-transparent"
+                                }`}
+                              />
+                              {standing.rank}
+                            </span>
                           </td>
                           <td className="px-4 py-3">
                             <Link

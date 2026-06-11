@@ -39,7 +39,7 @@ The system will provide:
 
 ### External Provider
 
-- API-Football
+- OpenLigaDB (datos del Mundial 2026)
 
 ### Infrastructure
 
@@ -78,7 +78,7 @@ txt tasks/
 
 Read AGENTS.md before making any implementation decision.
 
-API-Football must never be called directly from browser code.
+External data APIs (OpenLigaDB) must never be called directly from browser code.
 
 Supabase is the source of truth.
 

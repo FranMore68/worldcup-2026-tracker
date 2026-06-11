@@ -1,3 +1,14 @@
+export const FINISHED_STATUSES = ["FT", "AET", "PEN", "AWD", "WO"] as const;
+export const LIVE_STATUSES = ["LIV", "HT", "BT", "1H", "2H", "ET", "P"] as const;
+
+export function isFinishedStatus(status: string): boolean {
+  return (FINISHED_STATUSES as readonly string[]).includes(status);
+}
+
+export function isLiveStatus(status: string): boolean {
+  return (LIVE_STATUSES as readonly string[]).includes(status);
+}
+
 export function formatDateTime(dateString: string | Date): string {
   const date = new Date(dateString);
   return date.toLocaleString("ca-ES", {
@@ -51,6 +62,11 @@ export function formatMatchStatus(status: string): string {
 
 export function formatGroupName(group: string): string {
   return group.replace("Group ", "Grup ");
+}
+
+export function formatRound(round: string | null): string {
+  if (!round) return "";
+  return round.replace("Group ", "Grup ");
 }
 
 export function getTeamLogoFallback(name: string): string {

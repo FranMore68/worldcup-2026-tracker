@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS public.teams (
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
-COMMENT ON TABLE public.teams IS 'Stores team data from API-Football with raw JSONB payload';
+COMMENT ON TABLE public.teams IS 'Stores team data from OpenLigaDB with raw JSONB payload';
 
 CREATE INDEX IF NOT EXISTS idx_teams_api_id ON public.teams(api_id);
 CREATE INDEX IF NOT EXISTS idx_teams_name ON public.teams(name);
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS public.venues (
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
-COMMENT ON TABLE public.venues IS 'Stadium and venue data from API-Football';
+COMMENT ON TABLE public.venues IS 'Stadium and venue data (optional)';
 
 CREATE INDEX IF NOT EXISTS idx_venues_api_id ON public.venues(api_id);
 CREATE INDEX IF NOT EXISTS idx_venues_city ON public.venues(city);
@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS public.api_sync_logs (
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
-COMMENT ON TABLE public.api_sync_logs IS 'Audit log for all API-Football sync operations';
+COMMENT ON TABLE public.api_sync_logs IS 'Audit log for all data sync operations';
 
 CREATE INDEX IF NOT EXISTS idx_sync_type ON public.api_sync_logs(sync_type);
 CREATE INDEX IF NOT EXISTS idx_sync_status ON public.api_sync_logs(status);

@@ -19,13 +19,13 @@ MANDATORY STACK:
 - TailwindCSS
 - shadcn/ui
 - Supabase PostgreSQL
-- API-Football
+- OpenLigaDB (fuente de datos del Mundial 2026)
 - Coolify
 - Hostinger VPS
 
 CRITICAL RULES:
 1. ALL PUBLIC UI MUST BE IN CATALAN.
-2. Never call API-Football from browser code.
+2. Never call external data APIs (OpenLigaDB) from browser code.
 3. Supabase is the source of truth.
 4. Store raw API responses in JSONB.
 5. Mobile-first.
@@ -42,7 +42,7 @@ CRITICAL RULES:
 
 
 ARCHITECTURE:
-API-Football -> Sync Layer -> Supabase -> Next.js UI
+OpenLigaDB -> Sync Layer -> Supabase -> Next.js UI
 
 IMPLEMENTATION WORKFLOW:
 
