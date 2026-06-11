@@ -19,6 +19,8 @@ RUN npm run build
 # Stage 2: Producció
 FROM node:20-alpine AS runner
 
+RUN apk add --no-cache curl
+
 WORKDIR /app
 
 ENV NODE_ENV=production
