@@ -17,6 +17,11 @@ const robotoMono = Roboto_Mono({
 export const metadata: Metadata = {
   title: "Mundial Soccer 2026 Tracker",
   description: "Portal personal del Mundial de Futbol 2026. Segueix els partits, grups i resultats en català.",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Mundial 2026",
+  },
 };
 
 export default function RootLayout({
