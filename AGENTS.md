@@ -19,7 +19,7 @@ MANDATORY STACK:
 - TailwindCSS
 - shadcn/ui
 - Supabase PostgreSQL
-- API-Football
+- OpenLigaDB (formerly API-Football)
 - Coolify
 - Hostinger VPS
 
@@ -42,7 +42,7 @@ CRITICAL RULES:
 
 
 ARCHITECTURE:
-API-Football -> Sync Layer -> Supabase -> Next.js UI
+OpenLigaDB -> Sync Layer -> Supabase -> Next.js UI
 
 IMPLEMENTATION WORKFLOW:
 
