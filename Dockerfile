@@ -6,11 +6,11 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copiar package.json i package-lock.json
-COPY app/package*.json ./
+# Copiar package.json (no hi ha package-lock.json al repo)
+COPY app/package.json ./
 
 # Instal·lar dependencies (inclou devDependencies per al build)
-RUN npm ci
+RUN npm install
 
 # Copiar tot el codi de l'aplicació
 COPY app/ ./
