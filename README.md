@@ -39,7 +39,7 @@ The system will provide:
 
 ### External Provider
 
-- API-Football
+- OpenLigaDB
 
 ### Infrastructure
 
