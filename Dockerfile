@@ -23,9 +23,10 @@ FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-# Variable d'entorn per a producció
+# Variables d'entorn per a producció
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 
 # Copiar només el necessari des del builder
 COPY --from=builder /app/package*.json ./
@@ -37,8 +38,8 @@ COPY --from=builder /app/.next/static ./.next/static
 # Exposar el port
 EXPOSE 3000
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+# Healthcheck (més temps d'espera per l'inici)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000/api/health', (r) => r.statusCode === 200 ? process.exit(0) : process.exit(1))"
 
 # Iniciar l'aplicació
