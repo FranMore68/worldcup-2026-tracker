@@ -27,9 +27,9 @@ export default function RootLayout({
   return (
     <html
       lang="ca"
-      className={`${interSans.variable} ${robotoMono.variable} h-full antialiased`}
+      className={`dark ${interSans.variable} ${robotoMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-zinc-50 dark:bg-black">
+      <body className="min-h-full flex flex-col bg-zinc-50 text-zinc-900 dark:bg-black dark:text-white">
         <Header />
         <main className="flex-1">{children}</main>
         <Footer />

@@ -5,9 +5,9 @@ Define cómo se mantienen actualizados los datos de la aplicación durante el Mu
 
 ## Fuentes de datos (ambas gratuitas, sin clave)
 
-| Fuente | Datos | Rol |
-|---|---|---|
-| **OpenLigaDB** (`wm26/2026`) | Partidos, estados, resultados (con descanso), goles básicos, rondas | **Principal**: el marcador y el calendario siempre vienen de aquí |
+| Fuente                                                                | Datos                                                                                                                                    | Rol                                                                                 |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **OpenLigaDB** (`wm26/2026`)                                  | Partidos, estados, resultados (con descanso), goles básicos, rondas                                                                     | **Principal**: el marcador y el calendario siempre vienen de aquí            |
 | **API pública de FIFA.com** (`api.fifa.com`, no documentada) | Plantillas (26 jugadores con dorsal y posición), entrenador, tarjetas 🟨🟥, cambios, goles con asistente, estadio, árbitro, asistencia | **Enriquecimiento**: si fallara, la app sigue funcionando solo con OpenLigaDB |
 
 El enriquecimiento FIFA se guarda dentro del JSONB `raw_payload` (clave `fifa`) de
@@ -15,6 +15,7 @@ El enriquecimiento FIFA se guarda dentro del JSONB `raw_payload` (clave `fifa`) 
 Las sincronizaciones de OpenLigaDB preservan la clave `fifa` al actualizar.
 
 Reglas de convivencia:
+
 - Los eventos FIFA (goles+tarjetas+cambios) **reemplazan** a los goles de OpenLigaDB del
   mismo partido (son los mismos goles con más detalle).
 - Si un partido tiene eventos FIFA, la sync de OpenLigaDB ya no reescribe sus goles.
@@ -27,11 +28,13 @@ Supabase es la fuente de verdad para la web: las páginas nunca llaman a APIs ex
 Ambos GET o POST, protegidos con `?secret=...` o `Authorization: Bearer <SYNC_SECRET>`.
 
 ### `/api/sync-openligadb`
+
 - `?type=all` — equipos + partidos + clasificación de grupos.
 - `?type=live` — solo partidos en la ventana horaria actual.
 - `?type=standings` — recalcula la clasificación.
 
 ### `/api/sync-fifa`
+
 - `?type=live` (por defecto) — enriquece los partidos en ventana (-30 min, +4 h respecto
   al inicio): info del partido + plantillas/entrenador + eventos.
 - `?type=all` — recorre todos los partidos: estadio/árbitro para los pendientes y
@@ -43,6 +46,7 @@ selección (mapa ISO3→FIFA en el código: DEU→GER, CHE→SUI, etc.).
 ## Calendario recomendado (cron del VPS o Coolify Scheduled Tasks)
 
 ```cron
+
 # Marcadores en directo (OpenLigaDB): cada 3 min en franjas de partidos (hora España)
 */3 17-23,0-6 * * * curl -s "https://TU-DOMINIO/api/sync-openligadb?type=live&secret=$SYNC_SECRET" > /dev/null
 
@@ -51,6 +55,9 @@ selección (mapa ISO3→FIFA en el código: DEU→GER, CHE→SUI, etc.).
 
 # Sincronización completa diaria (correcciones + nuevos cruces de eliminatorias + estadios)
 30 8 * * * curl -s "https://TU-DOMINIO/api/sync-openligadb?type=all&secret=$SYNC_SECRET" > /dev/null
+35 8 * * * curl -s "https://TU-DOMINIO/api/sync-fifa?type=all&secret=$SYNC_SECRET" > /dev/null
+
+*/5 17-23,0-6 * * * curl -s "https://TU-DOMINIO/api/sync-fifa?type=live&secret=$SYNC_SECRET" > /dev/null
 35 8 * * * curl -s "https://TU-DOMINIO/api/sync-fifa?type=all&secret=$SYNC_SECRET" > /dev/null
 ```
 

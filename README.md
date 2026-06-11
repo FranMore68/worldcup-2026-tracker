@@ -62,17 +62,29 @@ Technical documentation and source code may remain in English.
 
 ## Project Structure
 
-txt / ├── AGENTS.md ├── docs/ ├── tasks/ └── app/ 
+```
+/
+├── AGENTS.md
+├── docs/
+├── tasks/
+├── Dockerfile
+├── .dockerignore
+└── app/
+```
 
 ## Documentation
 
 Project requirements and architecture are located in:
 
-txt docs/ 
+```
+docs/
+```
 
 Implementation tasks are located in:
 
-txt tasks/ 
+```
+tasks/
+```
 
 ## Development Rules
 
@@ -84,7 +96,35 @@ Supabase is the source of truth.
 
 All public UI must be in Catalan.
 
+## Deployment
+
+### Coolify (Production)
+
+1. Connect your GitHub repository to Coolify
+2. Select the repository and branch
+3. Coolify will automatically detect the `Dockerfile` at the root
+4. Set the following environment variables:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `SYNC_SECRET`
+5. Deploy!
+
+### Local Development
+
+```bash
+cd app
+npm install
+npm run dev
+```
+
+### Build Locally
+
+```bash
+cd app
+npm install
+npm run build
+```
+
 ## Current Status
 
-Project setup and documentation phase.
-Implementation has not started yet.
+Project build system is configured and ready for deployment.
