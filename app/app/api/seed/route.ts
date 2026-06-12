@@ -1,7 +1,17 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseClient } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
+
+const SYNC_SECRET = process.env.SYNC_SECRET;
+
+// Seed rewrites every team, fixture and standing, so it is a destructive
+// operation: gate it behind the same secret as the sync endpoints.
+function isAuthorized(request: NextRequest): boolean {
+  if (!SYNC_SECRET) return false;
+  if (request.headers.get("authorization") === `Bearer ${SYNC_SECRET}`) return true;
+  return request.nextUrl.searchParams.get("secret") === SYNC_SECRET;
+}
 
 const TEAM_NAME_DE_TO_CA: Record<string, { name: string; country: string }> = {
   "Mexiko": { name: "Mèxic", country: "Mèxic" },
@@ -76,7 +86,14 @@ function getGroupForMatch(team1Id: number, team2Id: number): string {
   return "Grup Desconegut";
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  if (!SYNC_SECRET) {
+    return NextResponse.json({ error: "SYNC_SECRET not configured" }, { status: 500 });
+  }
+  if (!isAuthorized(request)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const db = getSupabaseClient();
 
   try {
