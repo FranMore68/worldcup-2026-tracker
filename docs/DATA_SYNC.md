@@ -56,9 +56,6 @@ selección (mapa ISO3→FIFA en el código: DEU→GER, CHE→SUI, etc.).
 # Sincronización completa diaria (correcciones + nuevos cruces de eliminatorias + estadios)
 30 8 * * * curl -s "https://TU-DOMINIO/api/sync-openligadb?type=all&secret=$SYNC_SECRET" > /dev/null
 35 8 * * * curl -s "https://TU-DOMINIO/api/sync-fifa?type=all&secret=$SYNC_SECRET" > /dev/null
-
-*/5 17-23,0-6 * * * curl -s "https://TU-DOMINIO/api/sync-fifa?type=live&secret=$SYNC_SECRET" > /dev/null
-35 8 * * * curl -s "https://TU-DOMINIO/api/sync-fifa?type=all&secret=$SYNC_SECRET" > /dev/null
 ```
 
 En Coolify: *Project → Scheduled Tasks*, una tarea por línea con el mismo comando `curl`.
