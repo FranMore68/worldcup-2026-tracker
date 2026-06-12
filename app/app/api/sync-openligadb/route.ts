@@ -2,14 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseClient } from "@/lib/supabase";
 import { getOpenLigaMatches, OpenLigaMatch } from "@/lib/openLigaDb";
 import { getKnockoutStageKey, stageLabel } from "@/lib/rounds";
+import { statusRank } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 const SYNC_SECRET = process.env.SYNC_SECRET;
 
 // A match is considered potentially live from kickoff until this many minutes
-// later (covers extra time, penalties and long stoppages).
-const LIVE_WINDOW_MINUTES = 170;
+// later (covers extra time, penalties and long stoppages). Generous on purpose:
+// beyond it, a match OpenLigaDB still hasn't flagged finished is assumed over
+// rather than reverted to "not started".
+const LIVE_WINDOW_MINUTES = 210;
 
 const TEAM_NAME_DE_TO_CA: Record<string, { name: string; country: string }> = {
   "Mexiko": { name: "Mèxic", country: "Mèxic" },
@@ -142,15 +145,6 @@ function extractMatchState(match: OpenLigaMatch, now: Date): ExtractedState {
     ? match.goals[match.goals.length - 1]
     : null;
 
-  if (!match.matchIsFinished && now >= kickoff && now <= liveWindowEnd) {
-    return {
-      homeGoals: lastGoal?.scoreTeam1 ?? 0,
-      awayGoals: lastGoal?.scoreTeam2 ?? 0,
-      status: "LIV",
-      statusLong: "En directe",
-    };
-  }
-
   if (match.matchIsFinished) {
     // Finished but without a typed final result: fall back to last goal score.
     return {
@@ -161,7 +155,28 @@ function extractMatchState(match: OpenLigaMatch, now: Date): ExtractedState {
     };
   }
 
-  return { homeGoals: null, awayGoals: null, status: "NS", statusLong: "No començat" };
+  if (now < kickoff) {
+    return { homeGoals: null, awayGoals: null, status: "NS", statusLong: "No començat" };
+  }
+
+  if (now <= liveWindowEnd) {
+    return {
+      homeGoals: lastGoal?.scoreTeam1 ?? 0,
+      awayGoals: lastGoal?.scoreTeam2 ?? 0,
+      status: "LIV",
+      statusLong: "En directe",
+    };
+  }
+
+  // Kicked off and well past the live window but OpenLigaDB hasn't flagged it
+  // finished (community data lag). It is almost certainly over — show the last
+  // known score as final instead of reverting to "not started".
+  return {
+    homeGoals: lastGoal?.scoreTeam1 ?? 0,
+    awayGoals: lastGoal?.scoreTeam2 ?? 0,
+    status: "FT",
+    statusLong: "Finalitzat",
+  };
 }
 
 /**
@@ -278,13 +293,26 @@ async function runSync(type: string) {
       if (!match.team1?.teamId || !match.team2?.teamId) continue;
 
       const round = getRoundLabel(match, allMatches);
-      const { homeGoals, awayGoals, status, statusLong } = extractMatchState(match, now);
+      const computed = extractMatchState(match, now);
 
       const { data: existing } = await db
         .from("fixtures")
-        .select("status_short, home_goals, away_goals, round, raw_payload")
+        .select("status_short, status_long, home_goals, away_goals, round, raw_payload")
         .eq("api_id", match.matchID)
         .maybeSingle();
+
+      // Don't downgrade a match FIFA (or a prior sync) already advanced: if
+      // OpenLigaDB is lagging behind, preserve the existing status and score and
+      // only refresh the round label / raw payload.
+      const isDowngrade =
+        !!existing && statusRank(computed.status) < statusRank(existing.status_short);
+
+      const status = isDowngrade ? existing.status_short : computed.status;
+      const statusLong = isDowngrade
+        ? existing.status_long ?? computed.statusLong
+        : computed.statusLong;
+      const homeGoals = isDowngrade ? existing.home_goals : computed.homeGoals;
+      const awayGoals = isDowngrade ? existing.away_goals : computed.awayGoals;
 
       const needsUpdate =
         !existing ||

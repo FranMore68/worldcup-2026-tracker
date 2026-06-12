@@ -24,5 +24,12 @@ export interface FixtureFifaData {
   city: string | null;
   referee: string | null;
   attendance: number | null;
+  // Live score/status from FIFA (the authoritative real-time source). Present
+  // once the match has a FIFA status of live or finished; lets the app show the
+  // score even while OpenLigaDB (community-sourced) still lags behind.
+  matchStatus: number | null;
+  statusShort: string | null;
+  homeScore: number | null;
+  awayScore: number | null;
   syncedAt: string;
 }

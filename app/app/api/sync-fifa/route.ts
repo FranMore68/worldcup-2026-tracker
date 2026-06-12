@@ -9,7 +9,7 @@ import {
   FifaLiveMatch,
   FifaTimelineEvent,
 } from "@/lib/fifaApi";
-import { isFinishedStatus, isLiveStatus } from "@/lib/utils";
+import { isFinishedStatus, isLiveStatus, statusRank } from "@/lib/utils";
 import type { FifaSquadPlayer } from "@/types/fifa";
 
 export const dynamic = "force-dynamic";
@@ -87,6 +87,14 @@ function findFifaMatch(
         (awayCode && m.Away?.Abbreviation === awayCode)
     ) ?? null
   );
+}
+
+// FIFA MatchStatus: 0 = finished, 1 = not started, 3 = live (verified against
+// the live 2026 feed). Maps to our short status; null means "leave as-is".
+function fifaStatusToShort(matchStatus: number | null): { short: string; long: string } | null {
+  if (matchStatus === 3) return { short: "LIV", long: "En directe" };
+  if (matchStatus === 0) return { short: "FT", long: "Finalitzat" };
+  return null;
 }
 
 function parseMinute(matchMinute: string | null): { elapsed: number | null; extra: number | null } {
@@ -227,8 +235,18 @@ async function runSync(type: string) {
       continue;
     }
 
+    // FIFA is the authoritative real-time source for score and status. Both come
+    // straight from the calendar entry (updated live), so no extra request is
+    // needed and we are not gated behind OpenLigaDB, which lags on late matches.
+    const fifaState = fifaStatusToShort(fifaMatch.MatchStatus);
+    const fifaHomeScore = fifaMatch.Home?.Score ?? null;
+    const fifaAwayScore = fifaMatch.Away?.Score ?? null;
+
     const hasStarted =
-      isLiveStatus(fixture.status_short) || isFinishedStatus(fixture.status_short);
+      fifaMatch.MatchStatus === 3 ||
+      fifaMatch.MatchStatus === 0 ||
+      isLiveStatus(fixture.status_short) ||
+      isFinishedStatus(fixture.status_short);
 
     // Match info (stadium, referee, attendance) from the calendar entry.
     const referee =
@@ -242,12 +260,29 @@ async function runSync(type: string) {
       city: localized(fifaMatch.Stadium?.CityName ?? null),
       referee,
       attendance: fifaMatch.Attendance != null ? Number(fifaMatch.Attendance) || null : null,
+      matchStatus: fifaMatch.MatchStatus,
+      statusShort: fifaState?.short ?? null,
+      homeScore: fifaHomeScore,
+      awayScore: fifaAwayScore,
       syncedAt: new Date().toISOString(),
     };
 
+    // Build the column update: always refresh the fifa blob; additionally drive
+    // the visible score/status from FIFA, but never downgrade (don't revert a
+    // match OpenLigaDB already marked finished back to live, etc.).
+    const fixtureUpdate: Record<string, unknown> = {
+      raw_payload: { ...fixture.raw_payload, fifa: fifaInfo },
+    };
+    if (fifaState && statusRank(fifaState.short) >= statusRank(fixture.status_short)) {
+      fixtureUpdate.status_short = fifaState.short;
+      fixtureUpdate.status_long = fifaState.long;
+      if (fifaHomeScore != null) fixtureUpdate.home_goals = fifaHomeScore;
+      if (fifaAwayScore != null) fixtureUpdate.away_goals = fifaAwayScore;
+    }
+
     const { error: fixtureError } = await db
       .from("fixtures")
-      .update({ raw_payload: { ...fixture.raw_payload, fifa: fifaInfo } })
+      .update(fixtureUpdate)
       .eq("api_id", fixture.api_id);
     if (!fixtureError) infoUpdated++;
 

@@ -9,6 +9,15 @@ export function isLiveStatus(status: string): boolean {
   return (LIVE_STATUSES as readonly string[]).includes(status);
 }
 
+// Progression rank of a match status: not-started < live < finished. Used by the
+// sync jobs to never downgrade a fixture (e.g. OpenLigaDB lagging behind FIFA
+// must not revert a live/finished match back to "not started").
+export function statusRank(status: string): number {
+  if (isFinishedStatus(status)) return 2;
+  if (isLiveStatus(status)) return 1;
+  return 0;
+}
+
 export function formatDateTime(dateString: string | Date): string {
   const date = new Date(dateString);
   return date.toLocaleString("ca-ES", {
