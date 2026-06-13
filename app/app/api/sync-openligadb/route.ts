@@ -224,6 +224,115 @@ function isAuthorized(request: NextRequest): boolean {
   return secretParam === SYNC_SECRET;
 }
 
+type Db = ReturnType<typeof getSupabaseClient>;
+
+/**
+ * Recomputes every group's table from the finished group-stage fixtures and
+ * upserts the standings rows. Reads the whole table, so it is always complete
+ * regardless of which fixtures triggered the call. Returns the number of groups.
+ */
+async function computeStandings(db: Db): Promise<number> {
+  const { data: fixtures } = await db
+    .from("fixtures")
+    .select("*")
+    .eq("season", 2026)
+    .eq("status_short", "FT")
+    .like("round", "Grup %");
+
+  const standings: Record<
+    string,
+    Record<
+      number,
+      { played: number; won: number; draw: number; lost: number; gf: number; ga: number; points: number }
+    >
+  > = {};
+
+  // Every group starts with its four teams at zero, so ranks are always
+  // complete even before any match has finished.
+  for (const [group, teamIds] of Object.entries(GROUPS)) {
+    standings[group] = {};
+    for (const teamId of teamIds) {
+      standings[group][teamId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
+    }
+  }
+
+  for (const fixture of fixtures || []) {
+    const group = fixture.round?.split(" - ")[0] || "Grup Desconegut";
+    if (!standings[group]) standings[group] = {};
+
+    const homeId = fixture.home_team_id;
+    const awayId = fixture.away_team_id;
+    const homeGoals = fixture.home_goals ?? 0;
+    const awayGoals = fixture.away_goals ?? 0;
+
+    if (!standings[group][homeId]) standings[group][homeId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
+    if (!standings[group][awayId]) standings[group][awayId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
+
+    standings[group][homeId].played++;
+    standings[group][awayId].played++;
+    standings[group][homeId].gf += homeGoals;
+    standings[group][homeId].ga += awayGoals;
+    standings[group][awayId].gf += awayGoals;
+    standings[group][awayId].ga += homeGoals;
+
+    if (homeGoals > awayGoals) {
+      standings[group][homeId].won++;
+      standings[group][homeId].points += 3;
+      standings[group][awayId].lost++;
+    } else if (homeGoals < awayGoals) {
+      standings[group][awayId].won++;
+      standings[group][awayId].points += 3;
+      standings[group][homeId].lost++;
+    } else {
+      standings[group][homeId].draw++;
+      standings[group][homeId].points += 1;
+      standings[group][awayId].draw++;
+      standings[group][awayId].points += 1;
+    }
+  }
+
+  for (const [group, teams] of Object.entries(standings)) {
+    // FIFA tiebreakers (simplified): points, goal difference, goals scored.
+    const sorted = Object.entries(teams).sort((a, b) => {
+      if (b[1].points !== a[1].points) return b[1].points - a[1].points;
+      const diffB = b[1].gf - b[1].ga;
+      const diffA = a[1].gf - a[1].ga;
+      if (diffB !== diffA) return diffB - diffA;
+      return b[1].gf - a[1].gf;
+    });
+
+    for (let i = 0; i < sorted.length; i++) {
+      const [teamId, stats] = sorted[i];
+      await db.from("standings").upsert(
+        {
+          season: 2026,
+          group_name: group,
+          team_id: Number(teamId),
+          rank: i + 1,
+          points: stats.points,
+          goals_diff: stats.gf - stats.ga,
+          played: stats.played,
+          won: stats.won,
+          draw: stats.draw,
+          lost: stats.lost,
+          goals_for: stats.gf,
+          goals_against: stats.ga,
+          raw_payload: { source: "openligadb", calculated: true },
+          synced_at: new Date().toISOString(),
+        },
+        { onConflict: "season, group_name, team_id" }
+      );
+    }
+  }
+
+  await db
+    .from("app_settings")
+    .update({ value: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("key", "last_standings_sync");
+
+  return Object.keys(standings).length;
+}
+
 async function runSync(type: string) {
   const db = getSupabaseClient();
   const allMatches = await getOpenLigaMatches(2026);
@@ -397,107 +506,19 @@ async function runSync(type: string) {
       .eq("key", "last_fixtures_sync");
   }
 
-  if (type === "all" || type === "standings") {
-    // Standings are computed only from finished group-stage fixtures.
-    const { data: fixtures } = await db
-      .from("fixtures")
-      .select("*")
-      .eq("season", 2026)
-      .eq("status_short", "FT")
-      .like("round", "Grup %");
+  // Recompute standings on full/standings syncs, and on any live sync that has
+  // matches in its window (live or just finished) — otherwise a match finishing
+  // overnight would leave the group table stale until the next daily `all` run.
+  // Gating on the window (not on fixturesUpdated) matters because FIFA may be the
+  // one that flips a match to FT, leaving this sync with nothing to change.
+  const shouldComputeStandings =
+    type === "all" ||
+    type === "standings" ||
+    (type === "live" && matchesToSync.length > 0);
 
-    const standings: Record<
-      string,
-      Record<
-        number,
-        { played: number; won: number; draw: number; lost: number; gf: number; ga: number; points: number }
-      >
-    > = {};
-
-    // Every group starts with its four teams at zero, so ranks are always
-    // complete even before any match has finished.
-    for (const [group, teamIds] of Object.entries(GROUPS)) {
-      standings[group] = {};
-      for (const teamId of teamIds) {
-        standings[group][teamId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
-      }
-    }
-
-    for (const fixture of fixtures || []) {
-      const group = fixture.round?.split(" - ")[0] || "Grup Desconegut";
-      if (!standings[group]) standings[group] = {};
-
-      const homeId = fixture.home_team_id;
-      const awayId = fixture.away_team_id;
-      const homeGoals = fixture.home_goals ?? 0;
-      const awayGoals = fixture.away_goals ?? 0;
-
-      if (!standings[group][homeId]) standings[group][homeId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
-      if (!standings[group][awayId]) standings[group][awayId] = { played: 0, won: 0, draw: 0, lost: 0, gf: 0, ga: 0, points: 0 };
-
-      standings[group][homeId].played++;
-      standings[group][awayId].played++;
-      standings[group][homeId].gf += homeGoals;
-      standings[group][homeId].ga += awayGoals;
-      standings[group][awayId].gf += awayGoals;
-      standings[group][awayId].ga += homeGoals;
-
-      if (homeGoals > awayGoals) {
-        standings[group][homeId].won++;
-        standings[group][homeId].points += 3;
-        standings[group][awayId].lost++;
-      } else if (homeGoals < awayGoals) {
-        standings[group][awayId].won++;
-        standings[group][awayId].points += 3;
-        standings[group][homeId].lost++;
-      } else {
-        standings[group][homeId].draw++;
-        standings[group][homeId].points += 1;
-        standings[group][awayId].draw++;
-        standings[group][awayId].points += 1;
-      }
-    }
-
-    for (const [group, teams] of Object.entries(standings)) {
-      // FIFA tiebreakers (simplified): points, goal difference, goals scored.
-      const sorted = Object.entries(teams).sort((a, b) => {
-        if (b[1].points !== a[1].points) return b[1].points - a[1].points;
-        const diffB = b[1].gf - b[1].ga;
-        const diffA = a[1].gf - a[1].ga;
-        if (diffB !== diffA) return diffB - diffA;
-        return b[1].gf - a[1].gf;
-      });
-
-      for (let i = 0; i < sorted.length; i++) {
-        const [teamId, stats] = sorted[i];
-        await db.from("standings").upsert(
-          {
-            season: 2026,
-            group_name: group,
-            team_id: Number(teamId),
-            rank: i + 1,
-            points: stats.points,
-            goals_diff: stats.gf - stats.ga,
-            played: stats.played,
-            won: stats.won,
-            draw: stats.draw,
-            lost: stats.lost,
-            goals_for: stats.gf,
-            goals_against: stats.ga,
-            raw_payload: { source: "openligadb", calculated: true },
-            synced_at: new Date().toISOString(),
-          },
-          { onConflict: "season, group_name, team_id" }
-        );
-      }
-    }
-
-    results.standings = { success: true, groups: Object.keys(standings).length };
-
-    await db
-      .from("app_settings")
-      .update({ value: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq("key", "last_standings_sync");
+  if (shouldComputeStandings) {
+    const groups = await computeStandings(db);
+    results.standings = { success: true, groups };
   }
 
   return results;
