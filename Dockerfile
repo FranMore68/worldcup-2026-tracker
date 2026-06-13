@@ -26,6 +26,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# Cap the V8 heap so the container doesn't bloat the VPS (app needs ~300 MB in practice)
+ENV NODE_OPTIONS=--max_old_space_size=512
 
 # Copiar només el necessari des del builder
 COPY --from=builder /app/package*.json ./
