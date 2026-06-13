@@ -50,8 +50,14 @@ seguro: no ejecutan nada).
 ### `/api/sync-openligadb`
 
 - `?type=all` — equipos + partidos + clasificación de grupos.
-- `?type=live` — solo partidos en la ventana horaria actual.
-- `?type=standings` — recalcula la clasificación.
+- `?type=live` — solo partidos en la ventana horaria actual. **También recalcula la
+  clasificación** si hay partidos en ventana (en directo o recién acabados), para que
+  un partido nocturno no deje el grupo obsoleto hasta el sync diario.
+- `?type=standings` — recalcula solo la clasificación.
+
+La clasificación se computa desde los partidos de grupo finalizados (`status_short = FT`,
+`round` que empieza por `Grup `). Como FIFA puede ser quien marca el partido como FT, el
+recálculo en `live` se dispara por la ventana horaria, no por si esta sync cambió algo.
 
 ### `/api/sync-fifa`
 
