@@ -7,8 +7,8 @@ Define cómo se mantienen actualizados los datos de la aplicación durante el Mu
 
 | Fuente                                                                | Datos                                                                                                                                    | Rol                                                                                 |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| **OpenLigaDB** (`wm26/2026`)                                  | Partidos, estados, resultados (con descanso), goles básicos, rondas                                                                     | **Principal**: el marcador y el calendario siempre vienen de aquí            |
-| **API pública de FIFA.com** (`api.fifa.com`, no documentada) | Plantillas (26 jugadores con dorsal y posición), entrenador, tarjetas 🟨🟥, cambios, goles con asistente, estadio, árbitro, asistencia | **Enriquecimiento**: si fallara, la app sigue funcionando solo con OpenLigaDB |
+| **OpenLigaDB** (`wm26/2026`)                                  | Calendario, rondas, descanso, goles básicos. Marcador/estado de respaldo                                                                | **Base**: estructura del torneo; marcador cuando FIFA no cubre el partido     |
+| **API pública de FIFA.com** (`api.fifa.com`, no documentada) | Marcador y estado en vivo, plantillas (26 jugadores con dorsal y posición), entrenador, tarjetas 🟨🟥, cambios, goles con asistente, estadio, árbitro, asistencia | **Principal en directo**: marcador/estado y eventos; si fallara, la app sigue con OpenLigaDB |
 
 El enriquecimiento FIFA se guarda dentro del JSONB `raw_payload` (clave `fifa`) de
 `teams` y `fixtures`, y los eventos en `fixture_events` — **sin migraciones de esquema**.
@@ -16,16 +16,36 @@ Las sincronizaciones de OpenLigaDB preservan la clave `fifa` al actualizar.
 
 Reglas de convivencia:
 
-- Los eventos FIFA (goles+tarjetas+cambios) **reemplazan** a los goles de OpenLigaDB del
-  mismo partido (son los mismos goles con más detalle).
-- Si un partido tiene eventos FIFA, la sync de OpenLigaDB ya no reescribe sus goles.
+- **Marcador y estado**: FIFA es la fuente autoritativa en directo (su feed va en
+  tiempo real; OpenLigaDB es comunitario y se retrasa de madrugada). FIFA escribe
+  `status_short`/`home_goals`/`away_goals` directamente desde su calendario
+  (`MatchStatus` 0 = finalizado, 1 = no empezado, 3 = en directo).
+- **Nunca degradar**: `statusRank()` (`lib/utils.ts`) ordena los estados
+  `NS < LIV < FT`. Ninguna sync revierte un partido a un estado anterior, así que
+  OpenLigaDB no puede pisar lo que FIFA ya avanzó (ni al revés). OpenLigaDB tampoco
+  vuelve nunca a "No començat" un partido ya empezado: pasada la ventana en directo
+  (210 min) lo asume finalizado con el último marcador conocido.
+- **Eventos**: los eventos FIFA (goles+tarjetas+cambios) **reemplazan** a los goles de
+  OpenLigaDB del mismo partido (mismos goles con más detalle). Si un partido tiene
+  eventos FIFA, la sync de OpenLigaDB ya no reescribe sus goles.
+- **Goles en propia puerta**: FIFA los emite como `Type=34` (no `Type=0`) y atribuidos
+  al equipo del jugador que lo marca; la sync los acredita al rival (el que suma al
+  marcador) con `detail = "Own Goal"`. La página de equipo los excluye del cómputo de
+  goles por jugador.
+- **Comprobación de consistencia**: tras montar los eventos FIFA, se cuentan los goles
+  por bando y se comparan con el marcador. Si no cuadran (a FIFA le falta algún gol en
+  la cronología), los goles se reconstruyen desde OpenLigaDB —que lleva el flag de
+  autogol— conservando las tarjetas y cambios de FIFA. La cronología nunca contradice
+  el resultado.
 - Lesiones: descartado — no existe fuente gratuita estructurada.
 
 Supabase es la fuente de verdad para la web: las páginas nunca llaman a APIs externas.
 
 ## Endpoints de sincronización
 
-Ambos GET o POST, protegidos con `?secret=...` o `Authorization: Bearer <SYNC_SECRET>`.
+Todos GET o POST, protegidos con `?secret=...` o `Authorization: Bearer <SYNC_SECRET>`.
+Sin el secreto devuelven `401`; si `SYNC_SECRET` no está configurado, `500` (fallo
+seguro: no ejecutan nada).
 
 ### `/api/sync-openligadb`
 
@@ -36,21 +56,33 @@ Ambos GET o POST, protegidos con `?secret=...` o `Authorization: Bearer <SYNC_SE
 ### `/api/sync-fifa`
 
 - `?type=live` (por defecto) — enriquece los partidos en ventana (-30 min, +4 h respecto
-  al inicio): info del partido + plantillas/entrenador + eventos.
+  al inicio): marcador/estado + info del partido + plantillas/entrenador + eventos.
 - `?type=all` — recorre todos los partidos: estadio/árbitro para los pendientes y
-  enriquecimiento completo para los ya empezados o acabados.
+  enriquecimiento completo (marcador/estado/eventos) para los ya empezados o acabados.
+  Es también el que corrige hacia atrás los partidos ya guardados cuando cambia la lógica.
 
 El cruce OpenLigaDB↔FIFA se hace por hora de inicio y, si hay empate, por código de
 selección (mapa ISO3→FIFA en el código: DEU→GER, CHE→SUI, etc.).
 
+### `/api/seed`
+
+Reconstruye desde cero equipos, partidos y clasificaciones. Operación destructiva,
+**protegida con `SYNC_SECRET`** igual que las syncs. Uso puntual (primer arranque o
+reset), no programado. El antiguo `/api/debug` (sin auth) fue eliminado.
+
 ## Calendario recomendado (cron del VPS o Coolify Scheduled Tasks)
+
+> **Horas en UTC.** Las franjas (`17-23,0-6`) cubren las sedes de Norteamérica
+> (un partido empieza como muy tarde a las 03:00 UTC y acaba sobre las 05:00 UTC).
+> El cron corre en la zona horaria del contenedor; la imagen no fija `TZ`, así que
+> es UTC. Si algún día el contenedor corriera en otra zona, ajustar estas horas.
 
 ```cron
 
-# Marcadores en directo (OpenLigaDB): cada 3 min en franjas de partidos (hora España)
+# Marcador en directo (OpenLigaDB, de respaldo): cada 3 min en franjas de partidos (UTC)
 */3 17-23,0-6 * * * curl -s "https://TU-DOMINIO/api/sync-openligadb?type=live&secret=$SYNC_SECRET" > /dev/null
 
-# Tarjetas, cambios y plantillas en directo (FIFA): cada 5 min en las mismas franjas
+# Marcador/estado + tarjetas/cambios/plantillas en directo (FIFA, principal): cada 5 min (UTC)
 */5 17-23,0-6 * * * curl -s "https://TU-DOMINIO/api/sync-fifa?type=live&secret=$SYNC_SECRET" > /dev/null
 
 # Sincronización completa diaria (correcciones + nuevos cruces de eliminatorias + estadios)
@@ -65,6 +97,14 @@ En Coolify: *Project → Scheduled Tasks*, una tarea por línea con el mismo com
 Las páginas con partidos en directo incluyen un componente `AutoRefresh` que refresca los
 datos del servidor cada 45-60 s sin recargar la página. Todas las páginas y rutas API son
 `force-dynamic` y el cliente Supabase usa `cache: "no-store"`.
+
+## Horas mostradas al usuario
+
+Los partidos se guardan en `match_date_utc` (UTC). Las funciones de `lib/utils.ts`
+(`formatDate`, `formatTime`, `formatDateTime`) formatean **siempre** con
+`timeZone: "Europe/Madrid"`, así que la web muestra la hora peninsular española
+(CET/CEST) sin depender de la zona del servidor. Al añadir un nuevo formateador de
+fechas, incluir ese `timeZone` o la hora saldrá en UTC.
 
 ## Notas
 
