@@ -10,6 +10,7 @@ import {
   FifaTimelineEvent,
 } from "@/lib/fifaApi";
 import { isFinishedStatus, isLiveStatus, statusRank } from "@/lib/utils";
+import type { OpenLigaMatch } from "@/lib/openLigaDb";
 import type { FifaSquadPlayer } from "@/types/fifa";
 
 export const dynamic = "force-dynamic";
@@ -123,6 +124,7 @@ function buildEvents(
   playerNames: Map<string, string>
 ) {
   const rows = [];
+  const dbTeamIds = [...fifaTeamToDbTeam.values()];
 
   for (const event of events) {
     const { elapsed, extra } = parseMinute(event.MatchMinute);
@@ -141,15 +143,23 @@ function buildEvents(
       synced_at: new Date().toISOString(),
     };
 
-    if (event.Type === 0) {
+    // Type 0 = regular goal; Type 34 = own goal. FIFA attributes the own goal to
+    // the scoring player's own team, so it must be credited to the opponent (the
+    // side whose score actually increases).
+    if (event.Type === 0 || event.Type === 34) {
+      const isOwnGoal = event.Type === 34;
+      const creditedTeamId = isOwnGoal
+        ? dbTeamIds.find((id) => id !== teamId) ?? null
+        : teamId;
       rows.push({
         ...base,
+        team_id: creditedTeamId,
         event_type: "Goal",
-        detail: goalDetail(description),
+        detail: isOwnGoal ? "Own Goal" : goalDetail(description),
         player_id: event.IdPlayer ? Number(event.IdPlayer) : null,
         player_name: playerName,
-        assist_id: event.IdSubPlayer ? Number(event.IdSubPlayer) : null,
-        assist_name: subPlayerName,
+        assist_id: isOwnGoal || !event.IdSubPlayer ? null : Number(event.IdSubPlayer),
+        assist_name: isOwnGoal ? null : subPlayerName,
       });
     } else if (event.Type === 2 || event.Type === 3 || event.Type === 4) {
       if (!event.IdPlayer) continue; // cards to staff/bench without player
@@ -176,6 +186,43 @@ function buildEvents(
   }
 
   return rows;
+}
+
+/**
+ * Goal rows derived from the OpenLigaDB payload, used as a fallback when the
+ * FIFA timeline goals don't reconcile with the score. OpenLigaDB carries the
+ * running score, so the scoring side is the counter that increased (own goals
+ * naturally land on the benefiting side); it also flags penalties and own goals.
+ */
+function buildOpenLigaGoalRows(
+  fixtureApiId: number,
+  original: OpenLigaMatch | undefined,
+  homeTeamId: number,
+  awayTeamId: number
+) {
+  const goals = original?.goals;
+  if (!goals?.length) return null;
+
+  let prevHome = 0;
+  return goals.map((g) => {
+    const homeScored = g.scoreTeam1 > prevHome;
+    prevHome = g.scoreTeam1;
+    return {
+      fixture_id: fixtureApiId,
+      event_type: "Goal",
+      elapsed: g.matchMinute,
+      extra_time: null,
+      team_id: homeScored ? homeTeamId : awayTeamId,
+      player_id: g.goalGetterID || null,
+      player_name: g.goalGetterName?.trim() || null,
+      assist_id: null,
+      assist_name: null,
+      detail: g.isOwnGoal ? "Own Goal" : g.isPenalty ? "Penalty" : "Normal Goal",
+      comments: g.comment,
+      raw_payload: { source: "openligadb", original: g } as Record<string, unknown>,
+      synced_at: new Date().toISOString(),
+    };
+  });
 }
 
 function squadFromLive(team: FifaLiveMatch["HomeTeam"]): FifaSquadPlayer[] {
@@ -341,7 +388,35 @@ async function runSync(type: string) {
       }
     }
 
-    const eventRows = buildEvents(fixture.api_id, timeline, fifaTeamToDbTeam, playerNames);
+    let eventRows = buildEvents(fixture.api_id, timeline, fifaTeamToDbTeam, playerNames);
+
+    // Consistency check: the goal events must reconcile with the score. The FIFA
+    // timeline occasionally omits a goal; when the per-side count disagrees with
+    // the (authoritative) score, rebuild the goals from OpenLigaDB and keep the
+    // FIFA cards/subs, so the timeline never contradicts the result.
+    if (fifaHomeScore != null && fifaAwayScore != null) {
+      const goalRows = eventRows.filter((r) => r.event_type === "Goal");
+      const homeGoals = goalRows.filter((r) => r.team_id === fixture.home_team_id).length;
+      const awayGoals = goalRows.filter((r) => r.team_id === fixture.away_team_id).length;
+
+      if (homeGoals !== fifaHomeScore || awayGoals !== fifaAwayScore) {
+        const original = (fixture.raw_payload as { original?: OpenLigaMatch }).original;
+        const olGoals = buildOpenLigaGoalRows(
+          fixture.api_id,
+          original,
+          fixture.home_team_id,
+          fixture.away_team_id
+        );
+        console.warn(
+          `FIFA goal mismatch fixture ${fixture.api_id}: timeline ${homeGoals}-${awayGoals} vs score ${fifaHomeScore}-${fifaAwayScore}` +
+            (olGoals ? "; rebuilt goals from OpenLigaDB" : "; no OpenLigaDB fallback available")
+        );
+        if (olGoals) {
+          eventRows = [...eventRows.filter((r) => r.event_type !== "Goal"), ...olGoals];
+        }
+      }
+    }
+
     if (eventRows.length > 0) {
       // FIFA events replace the OpenLigaDB goal events: same goals, richer data.
       await db.from("fixture_events").delete().eq("fixture_id", fixture.api_id);
