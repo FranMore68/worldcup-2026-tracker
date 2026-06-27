@@ -58,15 +58,6 @@ function toFifaCode(openLigaCode: string | null): string | null {
   return OPENLIGA_TO_FIFA_CODE[upper] ?? upper;
 }
 
-function fromFifaCode(fifaCode: string | null): string | null {
-  if (!fifaCode) return null;
-  const upper = fifaCode.toUpperCase();
-  for (const [ol, fifa] of Object.entries(OPENLIGA_TO_FIFA_CODE)) {
-    if (fifa === upper) return ol;
-  }
-  return upper;
-}
-
 interface DbFixture {
   api_id: number;
   match_date_utc: string;
