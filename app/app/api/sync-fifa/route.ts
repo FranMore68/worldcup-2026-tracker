@@ -8,6 +8,8 @@ import {
   FifaCalendarMatch,
   FifaLiveMatch,
   FifaTimelineEvent,
+  FIFA_KNOCKOUT_STAGES,
+  FIFA_STAGE_ORDER,
 } from "@/lib/fifaApi";
 import { isFinishedStatus, isLiveStatus, statusRank } from "@/lib/utils";
 import type { OpenLigaMatch } from "@/lib/openLigaDb";
@@ -20,6 +22,20 @@ const SYNC_SECRET = process.env.SYNC_SECRET;
 // Window around kickoff during which a fixture is enriched in `live` mode.
 const LIVE_WINDOW_BEFORE_MS = 30 * 60_000;
 const LIVE_WINDOW_AFTER_MS = 4 * 3600_000;
+
+// FIFA code -> internal placeholder id for teams not yet known in the bracket.
+const PLACEHOLDER_ID_OFFSET = 200_000;
+
+function placeholderTeamId(name: string | null): { id: number; name: string } {
+  const label = name?.trim() || "Per determinar";
+  // Stable id derived from the label hash so the same placeholder always maps
+  // to the same row without colliding with real OpenLigaDB ids.
+  let hash = 0;
+  for (let i = 0; i < label.length; i++) {
+    hash = (hash * 31 + label.charCodeAt(i)) | 0;
+  }
+  return { id: PLACEHOLDER_ID_OFFSET + Math.abs(hash) % 100_000, name: label };
+}
 
 // teams.code holds the OpenLigaDB abbreviation (ISO-3166-alpha3 style); FIFA
 // uses its own codes. Only the differing pairs are listed, rest are identical.
@@ -234,6 +250,42 @@ function squadFromLive(team: FifaLiveMatch["HomeTeam"]): FifaSquadPlayer[] {
   }));
 }
 
+function resolveFifaSide(
+  side: FifaCalendarMatch["Home"],
+  teamIdByFifaCode: Map<string, number>
+): { teamId: number; name: string } {
+  const teamName = localized(side?.TeamName ?? null) ?? null;
+  const code = side?.Abbreviation?.toUpperCase() ?? null;
+
+  // Known team by FIFA code.
+  if (code) {
+    const mapped = teamIdByFifaCode.get(code);
+    if (mapped) return { teamId: mapped, name: teamName ?? code };
+  }
+
+  const placeholder = placeholderTeamId(teamName);
+  return { teamId: placeholder.id, name: placeholder.name };
+}
+
+function stageLabelFromFifa(stageId: string): string {
+  switch (stageId) {
+    case "289287":
+      return "Setzens de final";
+    case "289288":
+      return "Vuitens de final";
+    case "289289":
+      return "Quarts de final";
+    case "289290":
+      return "Semifinals";
+    case "289291":
+      return "3r i 4t lloc";
+    case "289292":
+      return "Final";
+    default:
+      return "Eliminatòries";
+  }
+}
+
 async function runSync(type: string) {
   const db = getSupabaseClient();
   const now = Date.now();
@@ -253,12 +305,121 @@ async function runSync(type: string) {
 
   const teamCodeById = new Map(teams.map((t) => [t.api_id, t.code]));
   const teamById = new Map(teams.map((t) => [t.api_id, t]));
+  // Reverse index: find DB team by FIFA code (or OpenLigaDB code when identical).
+  const teamIdByFifaCode = new Map<string, number>();
+  for (const t of teams) {
+    const code = t.code?.toUpperCase();
+    if (!code) continue;
+    const fifaCode = toFifaCode(code);
+    if (fifaCode) teamIdByFifaCode.set(fifaCode, t.api_id);
+  }
 
   const fifaByKickoff = new Map<number, FifaCalendarMatch[]>();
   for (const match of fifaMatches) {
     const kickoff = new Date(match.Date).getTime();
     if (!fifaByKickoff.has(kickoff)) fifaByKickoff.set(kickoff, []);
     fifaByKickoff.get(kickoff)!.push(match);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Knockout fallback: FIFA has all 104 fixtures, OpenLigaDB may still only
+  // have the group stage + R32. On full syncs, create any missing knockout
+  // fixtures from FIFA so the bracket appears before OpenLigaDB catches up.
+  // ---------------------------------------------------------------------------
+  let created = 0;
+  if (type === "all") {
+    const existingIds = new Set(fixtures.map((f) => f.api_id));
+    for (const stageId of FIFA_KNOCKOUT_STAGES) {
+      const stageMatches = await getFifaSeasonMatches(stageId);
+      for (const match of stageMatches) {
+        const apiId = Number(match.IdMatch);
+        if (existingIds.has(apiId)) continue;
+
+        const { teamId: homeTeamId, name: homeName } = resolveFifaSide(match.Home, teamIdByFifaCode);
+        const { teamId: awayTeamId, name: awayName } = resolveFifaSide(match.Away, teamIdByFifaCode);
+
+        // Ensure placeholder rows exist in teams for FK integrity.
+        for (const { id, name } of [
+          { id: homeTeamId, name: homeName },
+          { id: awayTeamId, name: awayName },
+        ]) {
+          if (id >= PLACEHOLDER_ID_OFFSET && !teamById.has(id)) {
+            await db.from("teams").upsert(
+              {
+                api_id: id,
+                name,
+                code: null,
+                country: null,
+                founded: null,
+                national: true,
+                logo: null,
+                venue_id: null,
+                raw_payload: { source: "fifa-placeholder", label: name },
+                synced_at: new Date().toISOString(),
+              },
+              { onConflict: "api_id" }
+            );
+            teamById.set(id, { api_id: id, code: null, raw_payload: { source: "fifa-placeholder", label: name } });
+            teamCodeById.set(id, null);
+          }
+        }
+
+        const orderId = FIFA_STAGE_ORDER[stageId] ?? 4;
+        const roundLabel = orderId === 8
+          ? match.IdMatch === "400021543" ? "Final" : "3r i 4t lloc"
+          : stageLabelFromFifa(match.IdStage);
+
+        const fifaInfo = {
+          idMatch: match.IdMatch,
+          idStage: match.IdStage,
+          stadium: localized(match.Stadium?.Name ?? null),
+          city: localized(match.Stadium?.CityName ?? null),
+          referee: null,
+          attendance: null,
+          matchStatus: match.MatchStatus,
+          statusShort: null,
+          homeScore: null,
+          awayScore: null,
+          syncedAt: new Date().toISOString(),
+        };
+
+        const { error } = await db.from("fixtures").upsert(
+          {
+            api_id: apiId,
+            match_date_utc: new Date(match.Date).toISOString(),
+            match_date_local: null,
+            status_short: "NS",
+            status_long: "No començat",
+            round: roundLabel,
+            home_team_id: homeTeamId,
+            away_team_id: awayTeamId,
+            home_goals: null,
+            away_goals: null,
+            venue_id: null,
+            league_id: 1,
+            season: 2026,
+            raw_payload: { source: "fifa", fifa: fifaInfo },
+            synced_at: new Date().toISOString(),
+          },
+          { onConflict: "api_id" }
+        );
+
+        if (error) {
+          console.error("FIFA knockout create error:", error.message);
+        } else {
+          created++;
+          existingIds.add(apiId);
+          fixtures.push({
+            api_id: apiId,
+            match_date_utc: new Date(match.Date).toISOString(),
+            status_short: "NS",
+            home_team_id: homeTeamId,
+            away_team_id: awayTeamId,
+            raw_payload: { source: "fifa", fifa: fifaInfo },
+          });
+        }
+      }
+    }
   }
 
   const targets = fixtures.filter((fixture) => {
@@ -433,6 +594,7 @@ async function runSync(type: string) {
     type,
     fixturesChecked: targets.length,
     matched: targets.length - unmatched,
+    created,
     infoUpdated,
     eventsWritten,
     squadsUpdated,

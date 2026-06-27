@@ -374,9 +374,14 @@ async function runSync(type: string) {
     const existingFifa = existingFifaByTeam.get(id);
     if (existingFifa) rawPayload.fifa = existingFifa;
 
+    // OpenLigaDB uses negative/synthetic ids for knockout placeholder teams
+    // such as "3 C/E/F/H/I" or "1L". Map them to a stable positive internal id
+    // so the fixtures foreign keys stay valid while the bracket fills in.
+    const teamId = id > 0 ? id : 100_000 + Math.abs(id);
+
     const { error } = await db.from("teams").upsert(
       {
-        api_id: id,
+        api_id: teamId,
         name: ca.name,
         code: team.shortName,
         country: ca.country,
@@ -406,7 +411,7 @@ async function runSync(type: string) {
 
       const { data: existing } = await db
         .from("fixtures")
-        .select("status_short, status_long, home_goals, away_goals, round, raw_payload")
+        .select("status_short, status_long, home_goals, away_goals, home_team_id, away_team_id, round, raw_payload")
         .eq("api_id", match.matchID)
         .maybeSingle();
 
@@ -428,6 +433,8 @@ async function runSync(type: string) {
         existing.status_short !== status ||
         existing.home_goals !== homeGoals ||
         existing.away_goals !== awayGoals ||
+        existing.home_team_id !== match.team1.teamId ||
+        existing.away_team_id !== match.team2.teamId ||
         existing.round !== round;
 
       if (needsUpdate) {
@@ -444,8 +451,8 @@ async function runSync(type: string) {
             status_short: status,
             status_long: statusLong,
             round,
-            home_team_id: match.team1.teamId,
-            away_team_id: match.team2.teamId,
+            home_team_id: match.team1.teamId > 0 ? match.team1.teamId : 100_000 + Math.abs(match.team1.teamId),
+            away_team_id: match.team2.teamId > 0 ? match.team2.teamId : 100_000 + Math.abs(match.team2.teamId),
             home_goals: homeGoals,
             away_goals: awayGoals,
             venue_id: null,

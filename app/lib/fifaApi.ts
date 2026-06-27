@@ -5,6 +5,20 @@
 
 const FIFA_API = "https://api.fifa.com/api/v3";
 
+// Knockout stage IDs from FIFA.com for the 2026 World Cup.
+// Stage 289273 = groups; 289287-289292 = R32, R16, QF, SF, TP, F.
+export const FIFA_STAGE_ORDER: Record<string, number> = {
+  "289273": 0, // group stage (ignored for knockout creation)
+  "289287": 4, // round of 32
+  "289288": 5, // round of 16
+  "289289": 6, // quarter-finals
+  "289290": 7, // semi-finals
+  "289291": 8, // third-place playoff
+  "289292": 8, // final (same matchday as third place)
+};
+
+export const FIFA_KNOCKOUT_STAGES = ["289287", "289288", "289289", "289290", "289291", "289292"];
+
 // Men's FIFA World Cup; season id for the 2026 edition (verified June 2026).
 export const FIFA_COMPETITION = "17";
 export const FIFA_SEASON = "285023";
@@ -101,9 +115,10 @@ async function fifaFetch<T>(path: string): Promise<T | null> {
   return (await response.json()) as T;
 }
 
-export async function getFifaSeasonMatches(): Promise<FifaCalendarMatch[]> {
+export async function getFifaSeasonMatches(stageId?: string): Promise<FifaCalendarMatch[]> {
+  const stageParam = stageId ? `&idStage=${stageId}` : "";
   const data = await fifaFetch<{ Results: FifaCalendarMatch[] }>(
-    `/calendar/matches?idCompetition=${FIFA_COMPETITION}&idSeason=${FIFA_SEASON}&count=500&language=en`
+    `/calendar/matches?idCompetition=${FIFA_COMPETITION}&idSeason=${FIFA_SEASON}${stageParam}&count=500&language=en`
   );
   return data?.Results ?? [];
 }
