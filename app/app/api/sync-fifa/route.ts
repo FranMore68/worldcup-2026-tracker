@@ -64,6 +64,8 @@ interface DbFixture {
   status_short: string;
   home_team_id: number;
   away_team_id: number;
+  round: string | null;
+  owner: string | null;
   raw_payload: Record<string, unknown>;
 }
 
@@ -291,7 +293,7 @@ async function runSync(type: string) {
   const now = Date.now();
 
   const [{ data: fixturesData }, { data: teamsData }, fifaMatches] = await Promise.all([
-    db.from("fixtures").select("api_id, match_date_utc, status_short, home_team_id, away_team_id, raw_payload"),
+    db.from("fixtures").select("api_id, match_date_utc, status_short, home_team_id, away_team_id, round, owner, raw_payload"),
     db.from("teams").select("api_id, code, raw_payload"),
     getFifaSeasonMatches(),
   ]);
@@ -321,13 +323,32 @@ async function runSync(type: string) {
     fifaByKickoff.get(kickoff)!.push(match);
   }
 
+  // Match identity for de-duplication: same round + kickoff means the same
+  // fixture regardless of source (OpenLigaDB vs FIFA may use different api_id).
+  const dbFixturesByIdentity = new Map<string, DbFixture>();
+  for (const f of fixtures) {
+    const key = `${f.round ?? "unknown"}|${new Date(f.match_date_utc).getTime()}`;
+    // Prefer OpenLigaDB-owned rows as the canonical row; otherwise keep the first.
+    const existing = dbFixturesByIdentity.get(key);
+    if (!existing || existing.owner !== "openligadb") {
+      dbFixturesByIdentity.set(key, f);
+    }
+  }
+
+  function findExistingFixture(
+    fifaMatch: FifaCalendarMatch,
+    roundLabel: string
+  ): DbFixture | null {
+    const kickoff = new Date(fifaMatch.Date).getTime();
+    const key = `${roundLabel}|${kickoff}`;
+    return dbFixturesByIdentity.get(key) ?? null;
+  }
+
   // ---------------------------------------------------------------------------
-  // Knockout fixtures are owned by OpenLigaDB: it already publishes the R32
-  // bracket with stable IDs (82099+) and we resolve placeholders such as "2A"
-  // or "3 C/E/F/H/I" from the computed group standings in sync-openligadb.
-  // FIFA uses different match IDs and sometimes different kickoff times, so
-  // creating knockout fixtures from FIFA would duplicate the bracket. We only
-  // enrich existing knockout fixtures; we never create new ones here.
+  // Knockout fallback: OpenLigaDB owns the bracket structure (stable IDs). FIFA
+  // is used only when OpenLigaDB has not yet published a knockout fixture. If a
+  // FIFA knockout match shares round+kickoff with an existing DB row, we do
+  // NOT create a duplicate; that row will be enriched later in the loop.
   // ---------------------------------------------------------------------------
   let created = 0;
   if (type === "all") {
@@ -344,11 +365,15 @@ async function runSync(type: string) {
         const apiId = Number(match.IdMatch);
         if (existingIds.has(apiId)) continue;
 
-        // Skip FIFA knockout matches whose kickoff already exists in the DB,
-        // because OpenLigaDB likely already covers that fixture with another ID.
-        const kickoff = new Date(match.Date).getTime();
-        const kickoffIds = existingByKickoff.get(kickoff) ?? [];
-        if (kickoffIds.length > 0) continue;
+        const orderId = FIFA_STAGE_ORDER[stageId] ?? 4;
+        const roundLabel = orderId === 8
+          ? match.IdMatch === "400021543" ? "Final" : "3r i 4t lloc"
+          : stageLabelFromFifa(match.IdStage);
+
+        // If OpenLigaDB (or a previous FIFA run) already owns this round+kickoff,
+        // do not create a duplicate fixture. That row will be enriched below.
+        const existingFixture = findExistingFixture(match, roundLabel);
+        if (existingFixture) continue;
 
         const { teamId: homeTeamId, name: homeName } = resolveFifaSide(match.Home, teamIdByFifaCode);
         const { teamId: awayTeamId, name: awayName } = resolveFifaSide(match.Away, teamIdByFifaCode);
@@ -379,11 +404,6 @@ async function runSync(type: string) {
           }
         }
 
-        const orderId = FIFA_STAGE_ORDER[stageId] ?? 4;
-        const roundLabel = orderId === 8
-          ? match.IdMatch === "400021543" ? "Final" : "3r i 4t lloc"
-          : stageLabelFromFifa(match.IdStage);
-
         const fifaInfo = {
           idMatch: match.IdMatch,
           idStage: match.IdStage,
@@ -413,6 +433,7 @@ async function runSync(type: string) {
             venue_id: null,
             league_id: 1,
             season: 2026,
+            owner: "fifa",
             raw_payload: { source: "fifa", fifa: fifaInfo },
             synced_at: new Date().toISOString(),
           },
@@ -430,6 +451,8 @@ async function runSync(type: string) {
             status_short: "NS",
             home_team_id: homeTeamId,
             away_team_id: awayTeamId,
+            round: roundLabel,
+            owner: "fifa",
             raw_payload: { source: "fifa", fifa: fifaInfo },
           });
         }

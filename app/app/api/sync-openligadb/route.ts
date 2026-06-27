@@ -503,6 +503,9 @@ async function runSync(type: string) {
             venue_id: null,
             league_id: 1,
             season: 2026,
+            // OpenLigaDB owns structural data. If a FIFA row already existed at
+            // this round+kickoff, the upsert by api_id reassigns ownership.
+            owner: "openligadb",
             raw_payload: rawPayload,
             synced_at: new Date().toISOString(),
           },

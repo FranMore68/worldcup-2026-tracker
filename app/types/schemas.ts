@@ -50,6 +50,10 @@ export const FixtureSchema = z.object({
   venue_id: z.number().nullable(),
   league_id: z.number().nullable(),
   season: z.number().nullable(),
+  // Who owns this fixture row: "openligadb" or "fifa". OpenLigaDB wins on
+  // structural data (api_id, teams, round) because it has stable IDs; FIFA is
+  // the authoritative real-time layer for score/status/events.
+  owner: z.string().nullable(),
   raw_payload: z.record(z.string(), z.unknown()),
   synced_at: z.string().nullable(),
   created_at: z.string().nullable(),
