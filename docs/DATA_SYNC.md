@@ -67,8 +67,40 @@ recálculo en `live` se dispara por la ventana horaria, no por si esta sync camb
   enriquecimiento completo (marcador/estado/eventos) para los ya empezados o acabados.
   Es también el que corrige hacia atrás los partidos ya guardados cuando cambia la lógica.
 
-El cruce OpenLigaDB↔FIFA se hace por hora de inicio y, si hay empate, por código de
-selección (mapa ISO3→FIFA en el código: DEU→GER, CHE→SUI, etc.).
+## Identidad de un partido y propietario (`owner`)
+
+Cada fila de `fixtures` tiene un `owner`: `openligadb` (defecto) o `fifa`.
+
+- **OpenLigaDB** es el propietario estructural: define el `api_id`, la ronda, los
+  equipos y la hora del partido. Sus ids son estables (ej. 82099-82114 para los
+  setzens de final).
+- **FIFA** enriquece: marcador, estado, eventos, plantillas, árbitro, estadio,
+  asistencia. FIFA nunca pisa el `api_id` ni los equipos de una fila propiedad
+  de OpenLigaDB.
+
+Para evitar duplicados entre ambas fuentes, un partido se identifica por
+**`(round, match_date_utc)`**:
+
+- `/api/sync-fifa` solo crea una nueva fila si no existe ninguna en esa
+  ronda + hora.
+- Si ya existe una fila, FIFA la enriquece (escribe `raw_payload.fifa` y, con
+  permiso de `statusRank`, actualiza marcador/estado).
+- Si OpenLigaDB publica después un partido en una ronda + hora donde FIFA ya
+  había creado una fila, el `upsert` por `api_id` convierte esa fila en propiedad
+  de OpenLigaDB (`owner = 'openligadb'`) y le asigna el `api_id` estable.
+
+La liga OpenLigaDB↔FIFA se hace por hora de inicio + ronda; cuando varios
+partidos comparten hora, el código de selección (mapa ISO3→FIFA: DEU→GER,
+CHE→SUI, etc.) desambigua.
+
+## Eliminatòries: no adivinamos el bracket
+
+OpenLigaDB publica los cruces de R32 con ids de equipo "placeholder"
+(ej. `7706 = 3 C/E/F/H/I`). La aplicación **no calcula la matriz de mejores
+terceros**: simplemente espera a que OpenLigaDB/FIFA reemplacen ese placeholder
+por el `teamId` real. Cuando eso ocurre, la sync actualiza automáticamente el
+fixture y los nombres del equipo. Esto evita mostrar un rival incorrecto mientras
+FIFA no haya anunciado oficialmente el cruce.
 
 ### `/api/seed`
 
