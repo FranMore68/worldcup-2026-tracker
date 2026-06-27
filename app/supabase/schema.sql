@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS public.fixtures (
   venue_id       INT REFERENCES public.venues(api_id),
   league_id      INT DEFAULT 1,
   season         INT DEFAULT 2026,
+  -- Structural owner of the row: 'openligadb' or 'fifa'. OpenLigaDB owns the
+  -- bracket and stable api_id; FIFA is the real-time enrichment layer.
+  owner          TEXT DEFAULT 'openligadb',
   raw_payload    JSONB NOT NULL DEFAULT '{}',
   synced_at      TIMESTAMPTZ DEFAULT NOW(),
   created_at     TIMESTAMPTZ DEFAULT NOW()

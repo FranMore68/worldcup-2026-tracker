@@ -181,6 +181,7 @@ export async function GET(request: NextRequest) {
           venue_id: null,
           league_id: 1,
           season: 2026,
+          owner: "openligadb",
           raw_payload: { source: "openligadb", original: match },
           synced_at: new Date().toISOString(),
         },
