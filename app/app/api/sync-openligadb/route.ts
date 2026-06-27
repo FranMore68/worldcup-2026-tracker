@@ -6,29 +6,6 @@ import { statusRank } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-// World Cup 2026 knockout bracket mapping for the 12-group format.
-// "1A" = winner of group A, "2A" = runner-up of group A, "3 A/B/C" = one of the
-// best third-placed teams. OpenLigaDB leaves these as placeholders; we resolve
-// them ourselves once the group stage is finished.
-const KNOCKOUT_PLACEHOLDERS: Record<string, { homeLabel: string; awayLabel: string }> = {
-  "82099": { homeLabel: "2A", awayLabel: "2B" },
-  "82100": { homeLabel: "1C", awayLabel: "2F" },
-  "82101": { homeLabel: "1E", awayLabel: "3 A/B/C/D" },
-  "82102": { homeLabel: "1G", awayLabel: "3 C/D/E/F" },
-  "82103": { homeLabel: "1I", awayLabel: "3 E/F/G/H" },
-  "82104": { homeLabel: "1K", awayLabel: "3 G/H/I/J" },
-  "82105": { homeLabel: "1A", awayLabel: "3 C/E/F/H/I" },
-  "82106": { homeLabel: "1L", awayLabel: "3 E/H/I/J/K" },
-  "82107": { homeLabel: "1B", awayLabel: "3 A/E/H/I/J" },
-  "82108": { homeLabel: "1D", awayLabel: "2J" },
-  "82109": { homeLabel: "1F", awayLabel: "3 B/E/F/G/I/J" },
-  "82110": { homeLabel: "1H", awayLabel: "2L" },
-  "82111": { homeLabel: "1J", awayLabel: "3 D/E/I/J/L" },
-  "82112": { homeLabel: "2D", awayLabel: "2G" },
-  "82113": { homeLabel: "2E", awayLabel: "2I" },
-  "82114": { homeLabel: "2K", awayLabel: "2L" },
-};
-
 const SYNC_SECRET = process.env.SYNC_SECRET;
 
 // A match is considered potentially live from kickoff until this many minutes
@@ -575,18 +552,14 @@ async function runSync(type: string) {
     const computedGroups = await computeStandings(db);
     results.standings = { success: true, groups: Object.keys(computedGroups).length };
 
-    // Once the group stage has finished, resolve the R32 placeholders that
-    // OpenLigaDB leaves empty (e.g. "2A vs 2B", "1L", "3 C/E/F/H/I") to the
-    // real teams based on the computed standings. This runs on every full sync
-    // and on any live sync that has matches in its window, so the bracket
-    // fills automatically as groups are decided.
-    const groupStageFinished = allMatches.every(
-      (m) => (m.group?.groupOrderID ?? 0) !== 3 || m.matchIsFinished
-    );
-    if ((type === "all" || type === "standings" || (type === "live" && matchesToSync.length > 0)) && groupStageFinished) {
-      const resolved = await resolveKnockoutPlaceholders(db, computedGroups, allMatches, now);
-      results.knockout = resolved;
-    }
+    // Resolve the R32 placeholders that OpenLigaDB leaves empty (e.g. "2A vs 2B",
+    // "1L", "3 C/E/F/H/I"). We only resolve a placeholder when OpenLigaDB has
+    // already substituted the placeholder teamId with a real one in the latest
+    // API response (teamId > 0 and not one of the known synthetic placeholder
+    // ids). That way we never guess the bracket: we mirror what FIFA/OpenLigaDB
+    // publish, which is especially important for the best-third-place matrix.
+    const resolved = await resolveKnockoutPlaceholders(db, allMatches, now);
+    results.knockout = resolved;
   }
 
   return results;
@@ -598,144 +571,33 @@ async function runSync(type: string) {
  */
 async function resolveKnockoutPlaceholders(
   db: Db,
-  standings: Record<string, { teamId: number; rank: number; stats: TeamStats }[]>,
   allMatches: OpenLigaMatch[],
   now: Date
 ): Promise<Record<string, unknown>> {
-  // Build ordered lists of group winners (1X), runners-up (2X) and third-placed teams.
-  const winners: Record<string, number> = {};
-  const runnersUp: Record<string, number> = {};
-  const thirdPlace: Record<string, number | null> = {};
-
-  for (const [groupName, ranked] of Object.entries(standings)) {
-    const letter = groupName.replace("Grup ", "").toUpperCase();
-    if (ranked[0]) winners[letter] = ranked[0].teamId;
-    if (ranked[1]) runnersUp[letter] = ranked[1].teamId;
-    if (ranked[2]) thirdPlace[letter] = ranked[2].teamId;
-  }
-
-  // Best third-placed teams ordered by FIFA tiebreakers (same as standings sort).
-  const bestThird = Object.entries(thirdPlace)
-    .filter(([, id]) => id !== null)
-    .map(([letter, id]) => {
-      const stats = standings[`Grup ${letter}`]?.[2]?.stats;
-      return { letter, teamId: id!, stats };
-    })
-    .sort((a, b) => {
-      if (!a.stats || !b.stats) return 0;
-      if (b.stats.points !== a.stats.points) return b.stats.points - a.stats.points;
-      const diffB = b.stats.gf - b.stats.ga;
-      const diffA = a.stats.gf - a.stats.ga;
-      if (diffB !== diffA) return diffB - diffA;
-      return b.stats.gf - a.stats.gf;
-    })
-    .map((t) => t.letter);
-
-  console.log("resolveKnockoutPlaceholders: winners:", winners);
-  console.log("resolveKnockoutPlaceholders: runnersUp:", runnersUp);
-  console.log("resolveKnockoutPlaceholders: thirdPlace:", thirdPlace);
-  console.log("resolveKnockoutPlaceholders: bestThird order:", bestThird);
-
-  const thirdRankByLetter = new Map<string, number>();
-  bestThird.forEach((letter, i) => thirdRankByLetter.set(letter, i + 1));
-
-  // R32 placeholder definitions. For third-place combinations we pick the team
-  // from the best-third ranking that satisfies the allowed set and is highest
-  // in the overall third-place table. For "3 A/B/C" we pick the best third
-  // from groups A, B or C.
-  const thirdSetPick = (allowed: string[]): number | null => {
-    for (const letter of bestThird) {
-      if (allowed.includes(letter)) {
-        const id = thirdPlace[letter];
-        if (id) return id;
-      }
-    }
-    return null;
-  };
-
-  const resolveLabel = (label: string): number | null => {
-    const oneMatch = label.match(/^1([A-L])$/);
-    if (oneMatch) return winners[oneMatch[1]] ?? null;
-
-    const twoMatch = label.match(/^2([A-L])$/);
-    if (twoMatch) return runnersUp[twoMatch[1]] ?? null;
-
-    const thirdMatch = label.match(/^3 ([A-L/]+)$/);
-    if (thirdMatch) {
-      const allowed = thirdMatch[1].split("/");
-      const resolved = thirdSetPick(allowed);
-      console.log(`resolveLabel third-place "${label}" allowed=${allowed.join(",")} => ${resolved}`);
-      return resolved;
-    }
-
-    return null;
-  };
-
-  // Fixture id -> OpenLiga placeholder team name (used only for display name).
-  const placeholderNames: Record<string, string> = {};
   const r32Matches = allMatches.filter((m) => (m.group?.groupOrderID ?? 0) === 4);
-  for (const match of r32Matches) {
-    const ph = KNOCKOUT_PLACEHOLDERS[String(match.matchID)];
-    if (!ph) continue;
-    const homeId = resolveLabel(ph.homeLabel);
-    const awayId = resolveLabel(ph.awayLabel);
-    if (!homeId || !awayId) continue;
 
-    // Find the real team rows from the team map/standings so we can show names.
-    const homeTeam = allMatches.find((m) => m.team1.teamId === homeId || m.team2.teamId === homeId);
-    const awayTeam = allMatches.find((m) => m.team1.teamId === awayId || m.team2.teamId === awayId);
-    const homeName = homeTeam
-      ? (homeTeam.team1.teamId === homeId ? homeTeam.team1.teamName : homeTeam.team2.teamName)
-      : ph.homeLabel;
-    const awayName = awayTeam
-      ? (awayTeam.team1.teamId === awayId ? awayTeam.team1.teamName : awayTeam.team2.teamName)
-      : ph.awayLabel;
-    placeholderNames[String(homeId)] = homeName;
-    placeholderNames[String(awayId)] = awayName;
-  }
-
-  // Ensure placeholder teams exist for the resolved ids (FK integrity) and have a name.
-  const uniqueIds = new Set<number>();
-  for (const match of r32Matches) {
-    const ph = KNOCKOUT_PLACEHOLDERS[String(match.matchID)];
-    if (!ph) continue;
-    const homeId = resolveLabel(ph.homeLabel);
-    const awayId = resolveLabel(ph.awayLabel);
-    if (homeId) uniqueIds.add(homeId);
-    if (awayId) uniqueIds.add(awayId);
-  }
-  for (const id of uniqueIds) {
-    const name = placeholderNames[String(id)] ?? "Equip resolt";
-    const ca = TEAM_NAME_DE_TO_CA[name] || { name, country: name };
-    await db.from("teams").upsert(
-      {
-        api_id: id,
-        name: ca.name,
-        code: null,
-        country: ca.country,
-        founded: null,
-        national: true,
-        logo: null,
-        venue_id: null,
-        raw_payload: { source: "openligadb-resolved", originalName: name },
-        synced_at: new Date().toISOString(),
-      },
-      { onConflict: "api_id" }
-    );
-  }
+  // OpenLigaDB placeholder team ids for knockout bracket slots. We only update
+  // the DB when OpenLigaDB replaces one of these with a real team id.
+  const placeholderIds = new Set<number>([
+    7699, 7700, 7701, 7702, 7703, 7704, 7705, 7706, 7707, 7708, 7709, 7710, 7711, 7712,
+    7713, 7714, 7715, 7716, 7717, 7718, 7719, 7720, 7721, 7722,
+  ]);
 
   let updated = 0;
   let skipped = 0;
-  for (const match of r32Matches) {
-    const ph = KNOCKOUT_PLACEHOLDERS[String(match.matchID)];
-    if (!ph) continue;
 
-    const homeId = resolveLabel(ph.homeLabel);
-    const awayId = resolveLabel(ph.awayLabel);
+  for (const match of r32Matches) {
+    const homeId = match.team1.teamId;
+    const awayId = match.team2.teamId;
+
+    const isPlaceholderHome = placeholderIds.has(homeId);
+    const isPlaceholderAway = placeholderIds.has(awayId);
+
     console.log(
-      `resolveKnockoutPlaceholders match ${match.matchID}: ${ph.homeLabel}=${homeId} vs ${ph.awayLabel}=${awayId}`
+      `resolveKnockoutPlaceholders match ${match.matchID}: home=${homeId} (placeholder=${isPlaceholderHome}), away=${awayId} (placeholder=${isPlaceholderAway})`
     );
-    if (!homeId || !awayId) {
+
+    if (isPlaceholderHome && isPlaceholderAway) {
       skipped++;
       continue;
     }
@@ -747,14 +609,42 @@ async function resolveKnockoutPlaceholders(
       .maybeSingle();
 
     if (!existing) continue;
-    if (existing.home_team_id === homeId && existing.away_team_id === awayId) continue;
+
+    const newHomeId = isPlaceholderHome ? existing.home_team_id : homeId;
+    const newAwayId = isPlaceholderAway ? existing.away_team_id : awayId;
+
+    if (existing.home_team_id === newHomeId && existing.away_team_id === newAwayId) continue;
+
+    // Make sure the resolved team rows exist with proper names.
+    for (const { id, name } of [
+      { id: newHomeId, name: match.team1.teamName },
+      { id: newAwayId, name: match.team2.teamName },
+    ]) {
+      if (!placeholderIds.has(id)) continue;
+      const ca = TEAM_NAME_DE_TO_CA[name] || { name, country: name };
+      await db.from("teams").upsert(
+        {
+          api_id: id,
+          name: ca.name,
+          code: match.team1.shortName ?? null,
+          country: ca.country,
+          founded: null,
+          national: true,
+          logo: match.team1.teamIconUrl || null,
+          venue_id: null,
+          raw_payload: { source: "openligadb-resolved", originalName: name },
+          synced_at: new Date().toISOString(),
+        },
+        { onConflict: "api_id" }
+      );
+    }
 
     const computed = extractMatchState(match, now);
     const { error } = await db
       .from("fixtures")
       .update({
-        home_team_id: homeId,
-        away_team_id: awayId,
+        home_team_id: newHomeId,
+        away_team_id: newAwayId,
         status_short: computed.status,
         status_long: computed.statusLong,
         home_goals: computed.homeGoals,
