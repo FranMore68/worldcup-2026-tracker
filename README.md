@@ -1,23 +1,14 @@
 # World Cup 2026 Tracker
 
-Personal FIFA World Cup 2026 tracking application.
+Open-source tracker for the FIFA World Cup 2026 (11 June – 19 July 2026).
 
-## Project Overview
+A modern, mobile-first web application that shows the full tournament calendar,
+group standings, knockout bracket, match details, teams, live scores and match
+events — all in Catalan.
 
-This project aims to build a modern web application for tracking the FIFA World Cup 2026.
-
-The application is designed for personal use, family and friends.
-
-The system will provide:
-
-- Full World Cup calendar
-- Group standings
-- Knockout bracket
-- Match details
-- Team pages
-- Match events
-- Statistics
-- Synchronization status
+> **Disclaimer:** This is an unofficial fan project. It is not affiliated with,
+> endorsed by, or sponsored by FIFA. Match data comes from public sources
+> (OpenLigaDB and the undocumented FIFA.com public API).
 
 ## Technology Stack
 
@@ -127,4 +118,17 @@ npm run build
 
 ## Current Status
 
-Project build system is configured and ready for deployment.
+- ✅ Live in production and deployed via Coolify.
+- ✅ Automatic data sync from OpenLigaDB and FIFA.com.
+- ✅ Live scores, standings, knockout bracket and match events.
+- ✅ Open source under the MIT License.
+
+## License
+
+[MIT](./LICENSE)
+
+## Contributing
+
+This project is primarily maintained for the 2026 World Cup. Issues and pull
+requests are welcome, especially bug fixes and data-source improvements.
+Please keep the public UI in Catalan and read `AGENTS.md` before contributing.
