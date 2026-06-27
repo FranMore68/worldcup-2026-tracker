@@ -322,18 +322,33 @@ async function runSync(type: string) {
   }
 
   // ---------------------------------------------------------------------------
-  // Knockout fallback: FIFA has all 104 fixtures, OpenLigaDB may still only
-  // have the group stage + R32. On full syncs, create any missing knockout
-  // fixtures from FIFA so the bracket appears before OpenLigaDB catches up.
+  // Knockout fixtures are owned by OpenLigaDB: it already publishes the R32
+  // bracket with stable IDs (82099+) and we resolve placeholders such as "2A"
+  // or "3 C/E/F/H/I" from the computed group standings in sync-openligadb.
+  // FIFA uses different match IDs and sometimes different kickoff times, so
+  // creating knockout fixtures from FIFA would duplicate the bracket. We only
+  // enrich existing knockout fixtures; we never create new ones here.
   // ---------------------------------------------------------------------------
   let created = 0;
   if (type === "all") {
     const existingIds = new Set(fixtures.map((f) => f.api_id));
+    const existingByKickoff = new Map<number, number[]>();
+    for (const f of fixtures) {
+      const t = new Date(f.match_date_utc).getTime();
+      if (!existingByKickoff.has(t)) existingByKickoff.set(t, []);
+      existingByKickoff.get(t)!.push(f.api_id);
+    }
     for (const stageId of FIFA_KNOCKOUT_STAGES) {
       const stageMatches = await getFifaSeasonMatches(stageId);
       for (const match of stageMatches) {
         const apiId = Number(match.IdMatch);
         if (existingIds.has(apiId)) continue;
+
+        // Skip FIFA knockout matches whose kickoff already exists in the DB,
+        // because OpenLigaDB likely already covers that fixture with another ID.
+        const kickoff = new Date(match.Date).getTime();
+        const kickoffIds = existingByKickoff.get(kickoff) ?? [];
+        if (kickoffIds.length > 0) continue;
 
         const { teamId: homeTeamId, name: homeName } = resolveFifaSide(match.Home, teamIdByFifaCode);
         const { teamId: awayTeamId, name: awayName } = resolveFifaSide(match.Away, teamIdByFifaCode);
