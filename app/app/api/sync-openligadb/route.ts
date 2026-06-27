@@ -631,6 +631,11 @@ async function resolveKnockoutPlaceholders(
     })
     .map((t) => t.letter);
 
+  console.log("resolveKnockoutPlaceholders: winners:", winners);
+  console.log("resolveKnockoutPlaceholders: runnersUp:", runnersUp);
+  console.log("resolveKnockoutPlaceholders: thirdPlace:", thirdPlace);
+  console.log("resolveKnockoutPlaceholders: bestThird order:", bestThird);
+
   const thirdRankByLetter = new Map<string, number>();
   bestThird.forEach((letter, i) => thirdRankByLetter.set(letter, i + 1));
 
@@ -658,7 +663,9 @@ async function resolveKnockoutPlaceholders(
     const thirdMatch = label.match(/^3 ([A-L/]+)$/);
     if (thirdMatch) {
       const allowed = thirdMatch[1].split("/");
-      return thirdSetPick(allowed);
+      const resolved = thirdSetPick(allowed);
+      console.log(`resolveLabel third-place "${label}" allowed=${allowed.join(",")} => ${resolved}`);
+      return resolved;
     }
 
     return null;
@@ -718,13 +725,20 @@ async function resolveKnockoutPlaceholders(
   }
 
   let updated = 0;
+  let skipped = 0;
   for (const match of r32Matches) {
     const ph = KNOCKOUT_PLACEHOLDERS[String(match.matchID)];
     if (!ph) continue;
 
     const homeId = resolveLabel(ph.homeLabel);
     const awayId = resolveLabel(ph.awayLabel);
-    if (!homeId || !awayId) continue;
+    console.log(
+      `resolveKnockoutPlaceholders match ${match.matchID}: ${ph.homeLabel}=${homeId} vs ${ph.awayLabel}=${awayId}`
+    );
+    if (!homeId || !awayId) {
+      skipped++;
+      continue;
+    }
 
     const { data: existing } = await db
       .from("fixtures")
@@ -756,7 +770,7 @@ async function resolveKnockoutPlaceholders(
     }
   }
 
-  return { resolved: updated };
+  return { resolved: updated, skippedUnresolved: skipped, r32Count: r32Matches.length };
 }
 
 async function handleRequest(request: NextRequest, type: string) {
