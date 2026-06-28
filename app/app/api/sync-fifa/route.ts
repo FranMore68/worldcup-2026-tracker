@@ -8,8 +8,6 @@ import {
   FifaCalendarMatch,
   FifaLiveMatch,
   FifaTimelineEvent,
-  FIFA_KNOCKOUT_STAGES,
-  FIFA_STAGE_ORDER,
 } from "@/lib/fifaApi";
 import { isFinishedStatus, isLiveStatus, statusRank } from "@/lib/utils";
 import type { OpenLigaMatch } from "@/lib/openLigaDb";
@@ -22,20 +20,6 @@ const SYNC_SECRET = process.env.SYNC_SECRET;
 // Window around kickoff during which a fixture is enriched in `live` mode.
 const LIVE_WINDOW_BEFORE_MS = 30 * 60_000;
 const LIVE_WINDOW_AFTER_MS = 4 * 3600_000;
-
-// FIFA code -> internal placeholder id for teams not yet known in the bracket.
-const PLACEHOLDER_ID_OFFSET = 200_000;
-
-function placeholderTeamId(name: string | null): { id: number; name: string } {
-  const label = name?.trim() || "Per determinar";
-  // Stable id derived from the label hash so the same placeholder always maps
-  // to the same row without colliding with real OpenLigaDB ids.
-  let hash = 0;
-  for (let i = 0; i < label.length; i++) {
-    hash = (hash * 31 + label.charCodeAt(i)) | 0;
-  }
-  return { id: PLACEHOLDER_ID_OFFSET + Math.abs(hash) % 100_000, name: label };
-}
 
 // teams.code holds the OpenLigaDB abbreviation (ISO-3166-alpha3 style); FIFA
 // uses its own codes. Only the differing pairs are listed, rest are identical.
@@ -252,42 +236,6 @@ function squadFromLive(team: FifaLiveMatch["HomeTeam"]): FifaSquadPlayer[] {
   }));
 }
 
-function resolveFifaSide(
-  side: FifaCalendarMatch["Home"],
-  teamIdByFifaCode: Map<string, number>
-): { teamId: number; name: string } {
-  const teamName = localized(side?.TeamName ?? null) ?? null;
-  const code = side?.Abbreviation?.toUpperCase() ?? null;
-
-  // Known team by FIFA code.
-  if (code) {
-    const mapped = teamIdByFifaCode.get(code);
-    if (mapped) return { teamId: mapped, name: teamName ?? code };
-  }
-
-  const placeholder = placeholderTeamId(teamName);
-  return { teamId: placeholder.id, name: placeholder.name };
-}
-
-function stageLabelFromFifa(stageId: string): string {
-  switch (stageId) {
-    case "289287":
-      return "Setzens de final";
-    case "289288":
-      return "Vuitens de final";
-    case "289289":
-      return "Quarts de final";
-    case "289290":
-      return "Semifinals";
-    case "289291":
-      return "3r i 4t lloc";
-    case "289292":
-      return "Final";
-    default:
-      return "Eliminatòries";
-  }
-}
-
 async function runSync(type: string) {
   const db = getSupabaseClient();
   const now = Date.now();
@@ -307,14 +255,6 @@ async function runSync(type: string) {
 
   const teamCodeById = new Map(teams.map((t) => [t.api_id, t.code]));
   const teamById = new Map(teams.map((t) => [t.api_id, t]));
-  // Reverse index: find DB team by FIFA code (or OpenLigaDB code when identical).
-  const teamIdByFifaCode = new Map<string, number>();
-  for (const t of teams) {
-    const code = t.code?.toUpperCase();
-    if (!code) continue;
-    const fifaCode = toFifaCode(code);
-    if (fifaCode) teamIdByFifaCode.set(fifaCode, t.api_id);
-  }
 
   const fifaByKickoff = new Map<number, FifaCalendarMatch[]>();
   for (const match of fifaMatches) {
@@ -323,142 +263,12 @@ async function runSync(type: string) {
     fifaByKickoff.get(kickoff)!.push(match);
   }
 
-  // Match identity for de-duplication: same round + kickoff means the same
-  // fixture regardless of source (OpenLigaDB vs FIFA may use different api_id).
-  const dbFixturesByIdentity = new Map<string, DbFixture>();
-  for (const f of fixtures) {
-    const key = `${f.round ?? "unknown"}|${new Date(f.match_date_utc).getTime()}`;
-    // Prefer OpenLigaDB-owned rows as the canonical row; otherwise keep the first.
-    const existing = dbFixturesByIdentity.get(key);
-    if (!existing || existing.owner !== "openligadb") {
-      dbFixturesByIdentity.set(key, f);
-    }
-  }
-
-  function findExistingFixture(
-    fifaMatch: FifaCalendarMatch,
-    roundLabel: string
-  ): DbFixture | null {
-    const kickoff = new Date(fifaMatch.Date).getTime();
-    const key = `${roundLabel}|${kickoff}`;
-    return dbFixturesByIdentity.get(key) ?? null;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Knockout fallback: OpenLigaDB owns the bracket structure (stable IDs). FIFA
-  // is used only when OpenLigaDB has not yet published a knockout fixture. If a
-  // FIFA knockout match shares round+kickoff with an existing DB row, we do
-  // NOT create a duplicate; that row will be enriched later in the loop.
-  // ---------------------------------------------------------------------------
-  let created = 0;
-  if (type === "all") {
-    const existingIds = new Set(fixtures.map((f) => f.api_id));
-    const existingByKickoff = new Map<number, number[]>();
-    for (const f of fixtures) {
-      const t = new Date(f.match_date_utc).getTime();
-      if (!existingByKickoff.has(t)) existingByKickoff.set(t, []);
-      existingByKickoff.get(t)!.push(f.api_id);
-    }
-    for (const stageId of FIFA_KNOCKOUT_STAGES) {
-      const stageMatches = await getFifaSeasonMatches(stageId);
-      for (const match of stageMatches) {
-        const apiId = Number(match.IdMatch);
-        if (existingIds.has(apiId)) continue;
-
-        const orderId = FIFA_STAGE_ORDER[stageId] ?? 4;
-        const roundLabel = orderId === 8
-          ? match.IdMatch === "400021543" ? "Final" : "3r i 4t lloc"
-          : stageLabelFromFifa(match.IdStage);
-
-        // If OpenLigaDB (or a previous FIFA run) already owns this round+kickoff,
-        // do not create a duplicate fixture. That row will be enriched below.
-        const existingFixture = findExistingFixture(match, roundLabel);
-        if (existingFixture) continue;
-
-        const { teamId: homeTeamId, name: homeName } = resolveFifaSide(match.Home, teamIdByFifaCode);
-        const { teamId: awayTeamId, name: awayName } = resolveFifaSide(match.Away, teamIdByFifaCode);
-
-        // Ensure placeholder rows exist in teams for FK integrity.
-        for (const { id, name } of [
-          { id: homeTeamId, name: homeName },
-          { id: awayTeamId, name: awayName },
-        ]) {
-          if (id >= PLACEHOLDER_ID_OFFSET && !teamById.has(id)) {
-            await db.from("teams").upsert(
-              {
-                api_id: id,
-                name,
-                code: null,
-                country: null,
-                founded: null,
-                national: true,
-                logo: null,
-                venue_id: null,
-                raw_payload: { source: "fifa-placeholder", label: name },
-                synced_at: new Date().toISOString(),
-              },
-              { onConflict: "api_id" }
-            );
-            teamById.set(id, { api_id: id, code: null, raw_payload: { source: "fifa-placeholder", label: name } });
-            teamCodeById.set(id, null);
-          }
-        }
-
-        const fifaInfo = {
-          idMatch: match.IdMatch,
-          idStage: match.IdStage,
-          stadium: localized(match.Stadium?.Name ?? null),
-          city: localized(match.Stadium?.CityName ?? null),
-          referee: null,
-          attendance: null,
-          matchStatus: match.MatchStatus,
-          statusShort: null,
-          homeScore: null,
-          awayScore: null,
-          syncedAt: new Date().toISOString(),
-        };
-
-        const { error } = await db.from("fixtures").upsert(
-          {
-            api_id: apiId,
-            match_date_utc: new Date(match.Date).toISOString(),
-            match_date_local: null,
-            status_short: "NS",
-            status_long: "No començat",
-            round: roundLabel,
-            home_team_id: homeTeamId,
-            away_team_id: awayTeamId,
-            home_goals: null,
-            away_goals: null,
-            venue_id: null,
-            league_id: 1,
-            season: 2026,
-            owner: "fifa",
-            raw_payload: { source: "fifa", fifa: fifaInfo },
-            synced_at: new Date().toISOString(),
-          },
-          { onConflict: "api_id" }
-        );
-
-        if (error) {
-          console.error("FIFA knockout create error:", error.message);
-        } else {
-          created++;
-          existingIds.add(apiId);
-          fixtures.push({
-            api_id: apiId,
-            match_date_utc: new Date(match.Date).toISOString(),
-            status_short: "NS",
-            home_team_id: homeTeamId,
-            away_team_id: awayTeamId,
-            round: roundLabel,
-            owner: "fifa",
-            raw_payload: { source: "fifa", fifa: fifaInfo },
-          });
-        }
-      }
-    }
-  }
+  // Structural fixtures come exclusively from OpenLigaDB: it is the source of
+  // truth for api_id, round, teams and kickoff times. FIFA never creates new
+  // fixture rows here; it only enriches existing ones with live score, status,
+  // squads, events and match info. This prevents duplicates like the R16 set
+  // (OpenLigaDB ids 82127+ vs FIFA ids 400021528+) when one API publishes a
+  // knockout round before the other.
 
   const targets = fixtures.filter((fixture) => {
     if (type === "live") {
@@ -632,7 +442,7 @@ async function runSync(type: string) {
     type,
     fixturesChecked: targets.length,
     matched: targets.length - unmatched,
-    created,
+    created: 0,
     infoUpdated,
     eventsWritten,
     squadsUpdated,
