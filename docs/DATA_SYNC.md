@@ -67,6 +67,13 @@ recálculo en `live` se dispara por la ventana horaria, no por si esta sync camb
   enriquecimiento completo (marcador/estado/eventos) para los ya empezados o acabados.
   Es también el que corrige hacia atrás los partidos ya guardados cuando cambia la lógica.
 
+**Importante:** `/api/sync-fifa` nunca crea nuevos partidos de eliminatòries
+(R16, QF, SF, TP, F). La estructura del bracket (api_id, ronda, equipos, hora)
+proviene exclusivamente de OpenLigaDB. FIFA solo enriquece las filas que ya
+existen. Esto evita duplicados cuando una API publica una ronda antes que la otra
+(como ocurrió con els vuitens de final: OpenLigaDB ids 82127-82134 y FIFA ids
+400021528-400021535).
+
 ## Identidad de un partido y propietario (`owner`)
 
 Cada fila de `fixtures` tiene un `owner`: `openligadb` (defecto) o `fifa`.
@@ -81,13 +88,17 @@ Cada fila de `fixtures` tiene un `owner`: `openligadb` (defecto) o `fifa`.
 Para evitar duplicados entre ambas fuentes, un partido se identifica por
 **`(round, match_date_utc)`**:
 
-- `/api/sync-fifa` solo crea una nueva fila si no existe ninguna en esa
-  ronda + hora.
-- Si ya existe una fila, FIFA la enriquece (escribe `raw_payload.fifa` y, con
-  permiso de `statusRank`, actualiza marcador/estado).
-- Si OpenLigaDB publica después un partido en una ronda + hora donde FIFA ya
-  había creado una fila, el `upsert` por `api_id` convierte esa fila en propiedad
-  de OpenLigaDB (`owner = 'openligadb'`) y le asigna el `api_id` estable.
+- OpenLigaDB es la única fuente estructural: crea las filas iniciales con
+  `api_id`, ronda, equipos y hora.
+- `/api/sync-fifa` enriquece las filas existentes (escribe `raw_payload.fifa`
+  y, con permiso de `statusRank`, actualiza marcador/estado).
+- Para partidos de fase de grupos, FIFA podía haber creado filas en el pasado
+  cuando OpenLigaDB aún no había publicado el calendario completo. Cuando
+  OpenLigaDB publica después un partido en una ronda + hora donde FIFA ya había
+  creado una fila, el `upsert` por `api_id` convierte esa fila en propiedad de
+  OpenLigaDB (`owner = 'openligadb'`) y le asigna el `api_id` estable.
+- Para eliminatòries (R16+), FIFA **nunca** crea filas: el bracket entero
+  proviene de OpenLigaDB.
 
 La liga OpenLigaDB↔FIFA se hace por hora de inicio + ronda; cuando varios
 partidos comparten hora, el código de selección (mapa ISO3→FIFA: DEU→GER,

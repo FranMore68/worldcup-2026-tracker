@@ -18,16 +18,17 @@ Store raw payloads in JSONB.
 | Column | Notes |
 | ------ | ----- |
 | `api_id` | OpenLigaDB match id. FIFA match ids are only used inside `raw_payload.fifa`. |
-| `owner` | `openligadb` (default) or `fifa`. Indicates who owns the structural row. OpenLigaDB owns the bracket and the stable `api_id`; FIFA can create a row only when OpenLigaDB has not yet published that fixture. |
+| `owner` | `openligadb` (default) or `fifa`. OpenLigaDB owns the bracket, api_id, round and teams. FIFA enriches existing rows and can only create group-stage fixtures when OpenLigaDB has not yet published them; FIFA never creates knockout fixtures. |
 | `round` | Catalan label: `Grup X - Jornada N` or `Setzens de final`, `Vuitens de final`, etc. |
 | `raw_payload` | `source: "openligadb"` plus the full API response; enriched with `fifa:` blob by `/api/sync-fifa`. |
 
 ## Deduplication
 
 A fixture is uniquely identified by `(round, match_date_utc)`. When `/api/sync-fifa` processes a FIFA match:
-- If a DB fixture already exists at that round + kickoff, FIFA enriches that row instead of creating a duplicate.
-- If the existing row is owned by `openligadb`, that row remains canonical.
-- FIFA only creates a new fixture when no row exists for that round + kickoff.
+- OpenLigaDB is the structural source: it creates rows with the stable `api_id`, round, teams and kickoff.
+- FIFA enriches existing rows (`raw_payload.fifa`, score, status) instead of creating duplicates.
+- For group-stage fixtures, FIFA may still create a row if OpenLigaDB has not yet published that match; when OpenLigaDB later publishes the same match, the `upsert` by `api_id` converts the row to `owner = 'openligadb'`.
+- For knockout fixtures (R16+), FIFA **never** creates rows. The entire bracket comes from OpenLigaDB.
 
 This allows both APIs to coexist even though they use different match ids and occasionally different kickoff times.
 
