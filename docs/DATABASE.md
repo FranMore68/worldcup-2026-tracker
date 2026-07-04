@@ -18,6 +18,10 @@ Store raw payloads in JSONB.
 | Column | Notes |
 | ------ | ----- |
 | `api_id` | OpenLigaDB match id. FIFA match ids are only used inside `raw_payload.fifa`. |
+| `home_goals` | Regular/extra-time goals. |
+| `away_goals` | Regular/extra-time goals. |
+| `home_penalty_goals` | Penalty shootout goals; only set for knockout matches that went to penalties. Source: FIFA. |
+| `away_penalty_goals` | Penalty shootout goals; only set for knockout matches that went to penalties. Source: FIFA. |
 | `owner` | `openligadb` (default) or `fifa`. OpenLigaDB owns the bracket, api_id, round and teams. FIFA enriches existing rows and can only create group-stage fixtures when OpenLigaDB has not yet published them; FIFA never creates knockout fixtures. |
 | `round` | Catalan label: `Grup X - Jornada N` or `Setzens de final`, `Vuitens de final`, etc. |
 | `raw_payload` | `source: "openligadb"` plus the full API response; enriched with `fifa:` blob by `/api/sync-fifa`. |
@@ -37,6 +41,7 @@ This allows both APIs to coexist even though they use different match ids and oc
 Migration files live in `app/supabase/migrations/` and should be run manually in Supabase SQL Editor for production.
 
 - `20260627_add_fixture_owner.sql` — adds `owner` column to `fixtures`, backfills existing rows to `openligadb`, and adds an index on `owner`.
+- `20260628_add_fixture_penalty_goals.sql` — adds `home_penalty_goals` and `away_penalty_goals` columns to `fixtures`, plus a partial index for matches with penalty data.
 
 ## Suggested indexes
 

@@ -74,6 +74,26 @@ existen. Esto evita duplicados cuando una API publica una ronda antes que la otr
 (como ocurrió con els vuitens de final: OpenLigaDB ids 82127-82134 y FIFA ids
 400021528-400021535).
 
+### Penaltis (tanda de penaltis)
+
+FIFA es la única fuente de datos de penaltis. `/api/sync-fifa` captura:
+
+- **Resultado resumido**: `HomeTeamPenaltyScore` / `AwayTeamPenaltyScore` del
+  objeto del partido, guardados en `fixtures.home_penalty_goals` y
+  `fixtures.away_penalty_goals`.
+- **Detalle de cada llançament**: eventos del timeline con `Period: 11`.
+  - `Type = 41` → penal marcat.
+  - `Type = 60` → penal fallat.
+  - Se almacenan en `fixture_events` con `event_type = "Penalty Shootout"`.
+
+OpenLigaDB no proporciona información de penaltis, así que `/api/sync-openligadb`
+mantiene los valores existentes de FIFA sin sobrescribirlos.
+
+La interfaz muestra el resultado de penaltis:
+- En el **bracket de eliminatòries**, junto al marcador regular, con `(X)`.
+- En la **pàgina de detall del partit**, debajo del marcador: `Penals: X - Y`.
+- En la **cronologia del partit**, cada lanzamiento con icono 🥅 o ❌.
+
 ## Identidad de un partido y propietario (`owner`)
 
 Cada fila de `fixtures` tiene un `owner`: `openligadb` (defecto) o `fifa`.
