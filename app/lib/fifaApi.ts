@@ -53,6 +53,10 @@ export interface FifaCalendarMatch {
   MatchStatus: number;
   Home: FifaTeamSide | null;
   Away: FifaTeamSide | null;
+  HomeTeamScore: number | null;
+  AwayTeamScore: number | null;
+  HomeTeamPenaltyScore: number | null;
+  AwayTeamPenaltyScore: number | null;
   Stadium: FifaStadium | null;
   Officials: FifaOfficial[] | null;
   Attendance: string | number | null;
@@ -92,13 +96,16 @@ export interface FifaLiveMatch {
 }
 
 export interface FifaTimelineEvent {
-  // 0 = goal, 2 = yellow card, 3 = red card, 4 = second yellow, 5 = substitution
+  // 0 = goal, 2 = yellow card, 3 = red card, 4 = second yellow, 5 = substitution,
+  // 41 = penalty shootout goal, 60 = penalty shootout miss. Period 11 = shootout.
   Type: number;
   MatchMinute: string | null;
   IdTeam: string | null;
   IdPlayer: string | null;
   IdSubPlayer: string | null;
   Period: number | null;
+  HomePenaltyGoals: number | null;
+  AwayPenaltyGoals: number | null;
   EventDescription: LocalizedName[] | null;
 }
 

@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS public.fixtures (
   away_team_id   INT NOT NULL REFERENCES public.teams(api_id),
   home_goals     INT,
   away_goals     INT,
+  home_penalty_goals INT,
+  away_penalty_goals INT,
   venue_id       INT REFERENCES public.venues(api_id),
   league_id      INT DEFAULT 1,
   season         INT DEFAULT 2026,

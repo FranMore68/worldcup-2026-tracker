@@ -48,6 +48,10 @@ interface DbFixture {
   status_short: string;
   home_team_id: number;
   away_team_id: number;
+  home_goals: number | null;
+  away_goals: number | null;
+  home_penalty_goals: number | null;
+  away_penalty_goals: number | null;
   round: string | null;
   owner: string | null;
   raw_payload: Record<string, unknown>;
@@ -184,6 +188,17 @@ function buildEvents(
         assist_id: event.IdPlayer ? Number(event.IdPlayer) : null,
         assist_name: playerName,
       });
+    } else if (event.Type === 41 || event.Type === 60) {
+      // Penalty shootout kick (Period 11). Type 41 = scored, 60 = missed.
+      rows.push({
+        ...base,
+        event_type: "Penalty Shootout",
+        detail: event.Type === 41 ? "Penalty Goal" : "Penalty Missed",
+        player_id: event.IdPlayer ? Number(event.IdPlayer) : null,
+        player_name: playerName,
+        assist_id: null,
+        assist_name: null,
+      });
     }
   }
 
@@ -241,7 +256,9 @@ async function runSync(type: string) {
   const now = Date.now();
 
   const [{ data: fixturesData }, { data: teamsData }, fifaMatches] = await Promise.all([
-    db.from("fixtures").select("api_id, match_date_utc, status_short, home_team_id, away_team_id, round, owner, raw_payload"),
+    db.from("fixtures").select(
+      "api_id, match_date_utc, status_short, home_team_id, away_team_id, home_goals, away_goals, home_penalty_goals, away_penalty_goals, round, owner, raw_payload"
+    ),
     db.from("teams").select("api_id, code, raw_payload"),
     getFifaSeasonMatches(),
   ]);
@@ -297,6 +314,8 @@ async function runSync(type: string) {
     const fifaState = fifaStatusToShort(fifaMatch.MatchStatus);
     const fifaHomeScore = fifaMatch.Home?.Score ?? null;
     const fifaAwayScore = fifaMatch.Away?.Score ?? null;
+    const fifaHomePenalties = fifaMatch.HomeTeamPenaltyScore ?? null;
+    const fifaAwayPenalties = fifaMatch.AwayTeamPenaltyScore ?? null;
 
     const hasStarted =
       fifaMatch.MatchStatus === 3 ||
@@ -320,6 +339,8 @@ async function runSync(type: string) {
       statusShort: fifaState?.short ?? null,
       homeScore: fifaHomeScore,
       awayScore: fifaAwayScore,
+      homePenaltyScore: fifaHomePenalties,
+      awayPenaltyScore: fifaAwayPenalties,
       syncedAt: new Date().toISOString(),
     };
 
@@ -334,6 +355,13 @@ async function runSync(type: string) {
       fixtureUpdate.status_long = fifaState.long;
       if (fifaHomeScore != null) fixtureUpdate.home_goals = fifaHomeScore;
       if (fifaAwayScore != null) fixtureUpdate.away_goals = fifaAwayScore;
+    }
+    // Penalty shootout result: only store when FIFA provides penalty scores.
+    // Knockout matches that end level go to penalties; the final result is
+    // decided by this separate score.
+    if (fifaHomePenalties != null && fifaAwayPenalties != null) {
+      fixtureUpdate.home_penalty_goals = fifaHomePenalties;
+      fixtureUpdate.away_penalty_goals = fifaAwayPenalties;
     }
 
     const { error: fixtureError } = await db

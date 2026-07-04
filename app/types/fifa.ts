@@ -31,5 +31,9 @@ export interface FixtureFifaData {
   statusShort: string | null;
   homeScore: number | null;
   awayScore: number | null;
+  // Penalty shootout result for knockout matches. Only present when the match
+  // was decided by penalties.
+  homePenaltyScore: number | null;
+  awayPenaltyScore: number | null;
   syncedAt: string;
 }

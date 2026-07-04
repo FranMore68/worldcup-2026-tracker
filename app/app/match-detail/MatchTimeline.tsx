@@ -10,6 +10,10 @@ export interface TimelineEvent {
 
 function eventIcon(event: TimelineEvent): string {
   if (event.type === "Goal") return "⚽";
+  if (event.type === "Penalty Shootout") {
+    if (event.detail?.toLowerCase().includes("missed")) return "❌";
+    return "🥅";
+  }
   if (event.type === "Card") {
     if (event.detail?.toLowerCase().includes("red")) return "🟥";
     return "🟨";
@@ -28,6 +32,13 @@ function eventDescription(event: TimelineEvent): string {
     if (event.detail === "Own Goal") return `${who} (pròpia porta)`;
     if (event.detail === "Missed Penalty") return `${who} (penal fallat)`;
     return who;
+  }
+
+  if (event.type === "Penalty Shootout") {
+    const action = event.detail?.toLowerCase().includes("missed")
+      ? "falla el penal"
+      : "marca el penal";
+    return `${player} (${action})`;
   }
 
   if (event.type === "Card") {

@@ -22,10 +22,12 @@ function shortDate(dateString: string): string {
 function TeamLine({
   team,
   goals,
+  penaltyGoals,
   winner,
 }: {
   team: Team | null;
   goals: number | null;
+  penaltyGoals: number | null;
   winner: boolean;
 }) {
   return (
@@ -55,9 +57,16 @@ function TeamLine({
           {team?.name ?? "Per determinar"}
         </span>
       </div>
-      {goals != null && (
-        <span className={`text-sm tabular-nums ${winner ? "font-bold" : ""}`}>{goals}</span>
-      )}
+      <div className="flex items-center gap-1.5">
+        {penaltyGoals != null && (
+          <span className="text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+            ({penaltyGoals})
+          </span>
+        )}
+        {goals != null && (
+          <span className={`text-sm tabular-nums ${winner ? "font-bold" : ""}`}>{goals}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -73,8 +82,8 @@ function BracketCard({
     return (
       <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="text-xs text-zinc-400 dark:text-zinc-500">Data per confirmar</div>
-        <TeamLine team={null} goals={null} winner={false} />
-        <TeamLine team={null} goals={null} winner={false} />
+        <TeamLine team={null} goals={null} penaltyGoals={null} winner={false} />
+        <TeamLine team={null} goals={null} penaltyGoals={null} winner={false} />
       </div>
     );
   }
@@ -84,8 +93,22 @@ function BracketCard({
   const showScore = isFinished || isLive;
   const homeGoals = showScore ? fixture.home_goals ?? 0 : null;
   const awayGoals = showScore ? fixture.away_goals ?? 0 : null;
-  const homeWins = isFinished && (homeGoals ?? 0) > (awayGoals ?? 0);
-  const awayWins = isFinished && (awayGoals ?? 0) > (homeGoals ?? 0);
+  const homePenalties = fixture.home_penalty_goals ?? null;
+  const awayPenalties = fixture.away_penalty_goals ?? null;
+  const wentToPenalties = homePenalties != null && awayPenalties != null;
+
+  // In a knockout shootout the winner is decided by penalties when they exist,
+  // otherwise by regular/extra time goals.
+  const homeWins = isFinished && (
+    wentToPenalties
+      ? homePenalties > awayPenalties
+      : (homeGoals ?? 0) > (awayGoals ?? 0)
+  );
+  const awayWins = isFinished && (
+    wentToPenalties
+      ? awayPenalties > homePenalties
+      : (awayGoals ?? 0) > (homeGoals ?? 0)
+  );
 
   return (
     <Link
@@ -94,6 +117,9 @@ function BracketCard({
     >
       <div className="flex items-center justify-between text-xs text-zinc-400 dark:text-zinc-500">
         <span>{shortDate(fixture.match_date_utc)}</span>
+        {wentToPenalties && (
+          <span className="font-medium text-zinc-500 dark:text-zinc-400">Penals</span>
+        )}
         {isLive && (
           <span className="flex items-center gap-1 font-semibold text-red-600">
             <span className="relative flex h-1.5 w-1.5">
@@ -107,11 +133,13 @@ function BracketCard({
       <TeamLine
         team={teamMap.get(fixture.home_team_id) ?? null}
         goals={homeGoals}
+        penaltyGoals={wentToPenalties ? homePenalties : null}
         winner={homeWins}
       />
       <TeamLine
         team={teamMap.get(fixture.away_team_id) ?? null}
         goals={awayGoals}
+        penaltyGoals={wentToPenalties ? awayPenalties : null}
         winner={awayWins}
       />
     </Link>

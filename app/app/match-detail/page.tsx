@@ -134,6 +134,10 @@ export default async function MatchDetailPage({
   const isLive = isLiveStatus(fixture.status_short);
   const hasStarted = isFinished || isLive;
 
+  const homePenalties = fixture.home_penalty_goals ?? null;
+  const awayPenalties = fixture.away_penalty_goals ?? null;
+  const wentToPenalties = homePenalties != null && awayPenalties != null;
+
   const events: TimelineEvent[] =
     dbEvents.length > 0 ? eventsFromTable(dbEvents) : eventsFromRawGoals(raw);
 
@@ -181,7 +185,8 @@ export default async function MatchDetailPage({
             </div>
 
             <div className="flex flex-col items-center">
-              {hasStarted ? (
+            {hasStarted ? (
+              <div className="flex flex-col items-center">
                 <div
                   className={`flex items-center gap-3 text-4xl font-bold ${
                     isLive ? "text-red-600 dark:text-red-400" : ""
@@ -191,17 +196,23 @@ export default async function MatchDetailPage({
                   <span className="text-zinc-400">-</span>
                   <span>{fixture.away_goals ?? 0}</span>
                 </div>
-              ) : (
-                <div className="text-2xl font-bold text-zinc-400">VS</div>
-              )}
-              {halftime && hasStarted && (
-                <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                  Descans: {halftime.pointsTeam1} - {halftime.pointsTeam2}
-                </div>
-              )}
-              <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                {fixture.status_long ?? ""}
+                {wentToPenalties && (
+                  <div className="mt-1 text-sm font-medium text-zinc-600 dark:text-zinc-300">
+                    Penals: {homePenalties} - {awayPenalties}
+                  </div>
+                )}
               </div>
+            ) : (
+              <div className="text-2xl font-bold text-zinc-400">VS</div>
+            )}
+            {halftime && hasStarted && (
+              <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                Descans: {halftime.pointsTeam1} - {halftime.pointsTeam2}
+              </div>
+            )}
+            <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              {fixture.status_long ?? ""}
+            </div>
             </div>
 
             <div className="flex flex-1 flex-col items-center gap-3">

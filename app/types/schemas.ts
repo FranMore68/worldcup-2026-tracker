@@ -47,6 +47,9 @@ export const FixtureSchema = z.object({
   away_team_id: z.number(),
   home_goals: z.number().nullable(),
   away_goals: z.number().nullable(),
+  // Knockout penalty shootout scores. Null when the match did not go to penalties.
+  home_penalty_goals: z.number().nullable(),
+  away_penalty_goals: z.number().nullable(),
   venue_id: z.number().nullable(),
   league_id: z.number().nullable(),
   season: z.number().nullable(),

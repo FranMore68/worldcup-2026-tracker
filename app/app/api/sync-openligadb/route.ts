@@ -433,7 +433,7 @@ async function runSync(type: string) {
 
       const { data: existing } = await db
         .from("fixtures")
-        .select("status_short, status_long, home_goals, away_goals, home_team_id, away_team_id, round, raw_payload")
+        .select("status_short, status_long, home_goals, away_goals, home_penalty_goals, away_penalty_goals, home_team_id, away_team_id, round, raw_payload")
         .eq("api_id", match.matchID)
         .maybeSingle();
 
@@ -477,6 +477,9 @@ async function runSync(type: string) {
             away_team_id: match.team2.teamId > 0 ? match.team2.teamId : 100_000 + Math.abs(match.team2.teamId),
             home_goals: homeGoals,
             away_goals: awayGoals,
+            // OpenLigaDB has no penalty-shootout data; keep FIFA's values if present.
+            home_penalty_goals: existing?.home_penalty_goals ?? null,
+            away_penalty_goals: existing?.away_penalty_goals ?? null,
             venue_id: null,
             league_id: 1,
             season: 2026,
