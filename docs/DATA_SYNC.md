@@ -70,9 +70,20 @@ recálculo en `live` se dispara por la ventana horaria, no por si esta sync camb
 **Importante:** `/api/sync-fifa` nunca crea nuevos partidos de eliminatòries
 (R16, QF, SF, TP, F). La estructura del bracket (api_id, ronda, equipos, hora)
 proviene exclusivamente de OpenLigaDB. FIFA solo enriquece las filas que ya
-existen. Esto evita duplicados cuando una API publica una ronda antes que la otra
-(como ocurrió con els vuitens de final: OpenLigaDB ids 82127-82134 y FIFA ids
-400021528-400021535).
+existen. Esto evita duplicados cuando una API publica una ronda antes que la otra.
+
+**Historia de duplicados resuelta:** antes del commit `34274d9`, `/api/sync-fifa`
+creaba fixtures de knockout cuando OpenLigaDB aún no los había publicado. Esto
+generó duplicados en producción que fueron limpiados manualmente:
+
+- Vuitens de final: OpenLigaDB 82127-82134 vs FIFA 400021528-400021535.
+- Quarts de final: OpenLigaDB 83125, 83126, 83462, 84295 vs FIFA
+  400021536-400021539.
+- Semifinals, 3r i 4t lloc i Final: FIFA 400021540-400021543 se eliminaron
+  proactivamente antes de que OpenLigaDB publicara los cruces reales.
+
+Tras el fix, el cron de `sync-fifa all` no recreará esas filas. OpenLigaDB
+será quien publique el bracket completo.
 
 ### Penaltis (tanda de penaltis)
 
